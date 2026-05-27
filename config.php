@@ -60,6 +60,20 @@ $config = [
         'token'   => '8700184412:AAEsondY4TWqcE0m0l2jRmv6fsO6_zK4HEc',
         'chat_id' => '7696259360',
     ],
+
+    /**
+     * Настройки рейтинга «Forbes».
+     * money_cols суммируются (COALESCE(col,0) + ...). Если у тебя одна колонка денег —
+     * оставь массив с одним элементом, например ['Money'].
+     */
+    'forbes' => [
+        'table'      => 'players',
+        'name_col'   => 'NickName',
+        'skin_col'   => 'Skin',
+        'money_cols' => ['Money', 'Bank'],
+        'limit'      => 20,
+        'cache_sec'  => 60,
+    ],
 ];
 
 /**
