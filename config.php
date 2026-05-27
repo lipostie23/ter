@@ -70,7 +70,7 @@ $config = [
         'table'      => 'players',
         'name_col'   => 'NickName',
         'skin_col'   => 'Skin',
-        'money_cols' => ['Money', 'Bank'],
+        'money_cols' => ['Cash', 'Bank'],
         'limit'      => 20,
         'cache_sec'  => 60,
     ],
