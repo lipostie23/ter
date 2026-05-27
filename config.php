@@ -63,16 +63,22 @@ $config = [
 
     /**
      * Настройки рейтинга «Forbes».
-     * money_cols суммируются (COALESCE(col,0) + ...). Если у тебя одна колонка денег —
-     * оставь массив с одним элементом, например ['Money'].
+     *
+     *  money_cols          — суммируются (COALESCE(col,0) + ...). Одна колонка — оставь один элемент.
+     *  admin_cols          — игрок попадает в рейтинг, только если сумма этих колонок = 0.
+     *                        Здесь перечисли всё, что отличает админа/хелпера/лидера от игрока.
+     *                        Пустой массив = не фильтровать.
+     *  exclude_nicknames   — точные ники, которые никогда не появятся в рейтинге.
      */
     'forbes' => [
-        'table'      => 'players',
-        'name_col'   => 'NickName',
-        'skin_col'   => 'Skin',
-        'money_cols' => ['Cash', 'Bank'],
-        'limit'      => 20,
-        'cache_sec'  => 60,
+        'table'             => 'players',
+        'name_col'          => 'NickName',
+        'skin_col'          => 'Skin',
+        'money_cols'        => ['Cash', 'Bank'],
+        'admin_cols'        => ['AdminLevel'],
+        'exclude_nicknames' => [],
+        'limit'             => 20,
+        'cache_sec'         => 60,
     ],
 ];
 
