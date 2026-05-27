@@ -1,7 +1,143 @@
 <?php
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/partials.php';
-$c = $config['core']; $l = $c['links'];
+
+/* =========================================================================
+ *  Forbes backend
+ * ========================================================================= */
+
+function forbes_safe_ident(string $s): string
+{
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $s)) {
+        throw new RuntimeException('Forbes: invalid identifier "' . $s . '"');
+    }
+    return $s;
+}
+
+function forbes_format_money(int $v): string
+{
+    return '$ ' . number_format($v, 0, '.', ' ');
+}
+
+/**
+ * Запрашивает топ-N игроков из БД по сумме денежных колонок.
+ *  @return array<int,array{name:string,skin:int,total:int}>
+ */
+function forbes_load_top(): array
+{
+    global $config;
+    $f = $config['forbes'];
+
+    $table  = forbes_safe_ident((string) $f['table']);
+    $nameC  = forbes_safe_ident((string) $f['name_col']);
+    $skinC  = forbes_safe_ident((string) $f['skin_col']);
+    $cols   = array_values(array_map('forbes_safe_ident', (array) $f['money_cols']));
+    $limit  = max(1, min(100, (int) $f['limit']));
+
+    if (empty($cols)) {
+        $sumExpr = '0';
+    } else {
+        $parts = [];
+        foreach ($cols as $c) {
+            $parts[] = "COALESCE(`{$c}`, 0)";
+        }
+        $sumExpr = implode(' + ', $parts);
+    }
+
+    $sql = "SELECT `{$nameC}` AS name, `{$skinC}` AS skin, ({$sumExpr}) AS total
+            FROM `{$table}`
+            WHERE `{$nameC}` IS NOT NULL AND `{$nameC}` <> ''
+            ORDER BY total DESC
+            LIMIT {$limit}";
+
+    $rows = db_pdo()->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = [
+            'name'  => (string) $r['name'],
+            'skin'  => (int) $r['skin'],
+            'total' => (int) $r['total'],
+        ];
+    }
+    return $out;
+}
+
+/**
+ * Кэшированная обёртка над forbes_load_top().
+ *  - Свежий кэш моложе TTL — отдаём как есть.
+ *  - Кэш просрочен — пытаемся обновить; если БД упала, возвращаем последний валидный кэш.
+ *  - Если кэша вообще нет и БД упала — пробрасываем исключение.
+ */
+function forbes_top_cached(): array
+{
+    global $config;
+    $ttl       = (int) ($config['forbes']['cache_sec'] ?? 60);
+    $cacheDir  = __DIR__ . '/cache';
+    $cacheFile = $cacheDir . '/forbes_top.json';
+
+    if ($ttl > 0 && is_file($cacheFile) && (time() - filemtime($cacheFile)) < $ttl) {
+        $cached = json_decode((string) @file_get_contents($cacheFile), true);
+        if (is_array($cached)) {
+            return $cached;
+        }
+    }
+
+    try {
+        $data = forbes_load_top();
+        @mkdir($cacheDir, 0755, true);
+        @file_put_contents($cacheFile, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+        return $data;
+    } catch (\Throwable $e) {
+        if (is_file($cacheFile)) {
+            $cached = json_decode((string) @file_get_contents($cacheFile), true);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+        throw $e;
+    }
+}
+
+/* =========================================================================
+ *  JSON API:  /forbes.php?json=1
+ * ========================================================================= */
+
+if (isset($_GET['json'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: public, max-age=30');
+    try {
+        echo json_encode(
+            ['ok' => true, 'players' => forbes_top_cached()],
+            JSON_UNESCAPED_UNICODE
+        );
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(
+            ['ok' => false, 'error' => 'Forbes load failed'],
+            JSON_UNESCAPED_UNICODE
+        );
+    }
+    exit;
+}
+
+/* =========================================================================
+ *  HTML-страница
+ * ========================================================================= */
+
+$c = $config['core'];
+$l = $c['links'];
+
+$players  = [];
+$loadErr  = null;
+try {
+    $players = forbes_top_cached();
+} catch (\Throwable $e) {
+    $loadErr = $e->getMessage();
+}
+
+$top3 = array_slice($players, 0, 3);
+$rest = array_slice($players, 3);
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -14,6 +150,11 @@ $c = $config['core']; $l = $c['links'];
     .forbes-hero .eyebrow { font-size: 11px; letter-spacing: 0.32em; text-transform: uppercase; color: var(--text-secondary); }
     .forbes-hero h1 { font-family: \'Space Grotesk\', sans-serif; font-size: clamp(28px, 5vw, 46px); font-weight: 600; letter-spacing: -0.025em; color: var(--text-primary); margin: 12px 0 8px; }
     .forbes-hero p { color: var(--text-secondary); font-size: 14px; line-height: 1.6; max-width: 520px; margin: 0 auto; }
+
+    /* Сообщение об ошибке/пустом списке */
+    .forbes-state { text-align: center; padding: 38px 26px; color: var(--text-secondary); font-size: 14px; }
+    .forbes-state .ic { font-size: 28px; color: var(--text-muted); margin-bottom: 10px; }
+    .forbes-state b { color: var(--text-primary); font-weight: 600; }
 
     /* ---------- ПОДИУМ ---------- */
     .podium {
@@ -144,6 +285,14 @@ $c = $config['core']; $l = $c['links'];
         letter-spacing: -0.01em;
     }
 
+    .updated-at {
+        text-align: center;
+        margin-top: 20px;
+        font-size: 11px;
+        color: var(--text-muted);
+        letter-spacing: 0.04em;
+    }
+
     @media (max-width: 760px) {
         .podium {
             grid-template-columns: 1fr;
@@ -178,81 +327,76 @@ $c = $config['core']; $l = $c['links'];
         <div class="ic-big"><i class="ph-fill ph-trophy"></i></div>
         <div class="eyebrow">Рейтинг</div>
         <h1>Богатейшие игроки</h1>
-        <p>Топ-20 самых обеспеченных персонажей сервера <?= htmlspecialchars($c['server']['name']) ?>. Список обновляется в реальном времени.</p>
+        <p>Топ-<?= (int) $config['forbes']['limit'] ?> самых обеспеченных персонажей сервера <?= htmlspecialchars($c['server']['name']) ?>. Список обновляется каждую минуту.</p>
     </div>
 
-    <div class="podium" id="podium"></div>
+<?php if ($loadErr !== null && empty($players)): ?>
+    <div class="glass reveal forbes-state">
+        <div class="ic"><i class="ph-fill ph-warning-circle"></i></div>
+        <b>Рейтинг временно недоступен.</b>
+        <div style="margin-top:6px;">Зайди чуть позже — данные подтянутся автоматически.</div>
+    </div>
+<?php elseif (empty($players)): ?>
+    <div class="glass reveal forbes-state">
+        <div class="ic"><i class="ph ph-users-three"></i></div>
+        <b>Пока что в рейтинге пусто.</b>
+        <div style="margin-top:6px;">Будь первым — заходи на сервер и зарабатывай!</div>
+    </div>
+<?php else: ?>
 
-    <div class="table-eyebrow reveal">остальные позиции</div>
-    <div class="table-card glass reveal delay-1" id="table"></div>
+    <?php
+    /* Подиум: показываем 2-1-3 (или меньше, если игроков меньше 3) */
+    $podiumOrder = [
+        ['idx' => 1, 'cls' => 'silver glass',      'label' => '2', 'delay' => 1],
+        ['idx' => 0, 'cls' => 'gold glass-strong', 'label' => '1', 'delay' => 2],
+        ['idx' => 2, 'cls' => 'bronze glass',      'label' => '3', 'delay' => 3],
+    ];
+    ?>
+    <div class="podium">
+    <?php foreach ($podiumOrder as $o): ?>
+        <?php if (!isset($top3[$o['idx']])) continue; ?>
+        <?php $p = $top3[$o['idx']]; ?>
+        <div class="podium-card <?= $o['cls'] ?> reveal delay-<?= $o['delay'] ?>">
+            <div class="rank-badge"><?= $o['label'] ?></div>
+            <div class="skin-frame">
+                <img src="skins/<?= (int) $p['skin'] ?>.png"
+                     alt=""
+                     onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%22240%22><rect width=%22100%25%22 height=%22100%25%22 fill=%22rgba(255,255,255,0.5)%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%238a929c%22 font-family=%22Inter%22 font-size=%2213%22>skin</text></svg>'">
+            </div>
+            <div class="name"><?= htmlspecialchars($p['name']) ?></div>
+            <div class="money">
+                <i class="ph-fill ph-coin"></i>
+                <?= htmlspecialchars(forbes_format_money($p['total'])) ?>
+            </div>
+        </div>
+    <?php endforeach; ?>
+    </div>
+
+    <?php if (!empty($rest)): ?>
+        <div class="table-eyebrow reveal">остальные позиции</div>
+        <div class="table-card glass reveal delay-1">
+        <?php foreach ($rest as $i => $p): ?>
+            <div class="table-row">
+                <div class="rank">#<?= $i + 4 ?></div>
+                <div class="player">
+                    <img class="avatar"
+                         src="skins/<?= (int) $p['skin'] ?>.png"
+                         alt=""
+                         onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2242%22 height=%2242%22><rect width=%22100%25%22 height=%22100%25%22 fill=%22rgba(255,255,255,0.5)%22/></svg>'">
+                    <span class="pname"><?= htmlspecialchars($p['name']) ?></span>
+                </div>
+                <div class="money"><?= htmlspecialchars(forbes_format_money($p['total'])) ?></div>
+            </div>
+        <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+
+    <div class="updated-at reveal">обновлено: <?= date('H:i') ?></div>
+
+<?php endif; ?>
 </section>
 
 <?php render_footer(); ?>
-
 <?php render_common_js(); ?>
-<script>
-    const players = [
-        { name: "Monarch",       money: "$ 999 999 999", skin: 230 },
-        { name: "Rich_Man",      money: "$ 540 000 000", skin: 120 },
-        { name: "Donater_Top",   money: "$ 320 000 000", skin: 46  },
-        { name: "Gamer_Pro",     money: "$ 150 000 000", skin: 21  },
-        { name: "Alex_Drift",    money: "$ 95 000 000",  skin: 2   },
-        { name: "Mafia_Boss",    money: "$ 80 000 000",  skin: 111 },
-        { name: "Cop_Killer",    money: "$ 75 000 000",  skin: 280 },
-        { name: "Taxi_Driver",   money: "$ 60 000 000",  skin: 14  },
-        { name: "Street_Racer",  money: "$ 55 000 000",  skin: 299 },
-        { name: "Bizwar_King",   money: "$ 50 000 000",  skin: 124 },
-        { name: "Farm_Worker",   money: "$ 45 000 000",  skin: 1   },
-        { name: "Trucker_Joe",   money: "$ 40 000 000",  skin: 15  },
-        { name: "Medic_Help",    money: "$ 38 000 000",  skin: 274 },
-        { name: "News_Reporter", money: "$ 35 000 000",  skin: 187 },
-        { name: "Army_General",  money: "$ 30 000 000",  skin: 287 },
-        { name: "Gangster_007",  money: "$ 25 000 000",  skin: 102 },
-        { name: "Hobo_Life",     money: "$ 20 000 000",  skin: 78  },
-        { name: "Casino_Winner", money: "$ 15 000 000",  skin: 113 },
-        { name: "Lucky_Guy",     money: "$ 10 000 000",  skin: 23  },
-        { name: "New_Player",    money: "$ 5 000 000",   skin: 9   }
-    ];
-
-    const podium = document.getElementById('podium');
-    const table  = document.getElementById('table');
-
-    const placeholderSkin   = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='240'><rect width='100%' height='100%' fill='rgba(255,255,255,0.5)'/><text x='50%' y='50%' text-anchor='middle' fill='%238a929c' font-family='Inter' font-size='13'>skin</text></svg>";
-    const placeholderAvatar = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='42' height='42'><rect width='100%' height='100%' fill='rgba(255,255,255,0.5)'/></svg>";
-
-    /* Размещаем карточки в порядке 2 - 1 - 3, как настоящий подиум */
-    const order = [
-        { idx: 1, cls: 'silver glass',        label: '2', delay: 1 },
-        { idx: 0, cls: 'gold glass-strong',   label: '1', delay: 2 },
-        { idx: 2, cls: 'bronze glass',        label: '3', delay: 3 },
-    ];
-    order.forEach(o => {
-        const p = players[o.idx];
-        const card = document.createElement('div');
-        card.className = `podium-card ${o.cls} reveal delay-${o.delay}`;
-        card.innerHTML = `
-            <div class="rank-badge">${o.label}</div>
-            <div class="skin-frame"><img src="skins/${p.skin}.png" alt="" onerror="this.src='${placeholderSkin}'"></div>
-            <div class="name">${p.name}</div>
-            <div class="money"><i class="ph-fill ph-coin"></i> ${p.money}</div>
-        `;
-        podium.appendChild(card);
-    });
-
-    for (let i = 3; i < players.length; i++) {
-        const p = players[i];
-        const row = document.createElement('div');
-        row.className = 'table-row';
-        row.innerHTML = `
-            <div class="rank">#${i + 1}</div>
-            <div class="player">
-                <img class="avatar" src="skins/${p.skin}.png" alt="" onerror="this.src='${placeholderAvatar}'">
-                <span class="pname">${p.name}</span>
-            </div>
-            <div class="money">${p.money}</div>
-        `;
-        table.appendChild(row);
-    }
-</script>
 </body>
 </html>
