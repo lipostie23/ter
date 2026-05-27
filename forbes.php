@@ -32,6 +32,11 @@ function forbes_load_top(): array
     $nameC  = forbes_safe_ident((string) $f['name_col']);
     $skinC  = forbes_safe_ident((string) $f['skin_col']);
     $cols   = array_values(array_map('forbes_safe_ident', (array) $f['money_cols']));
+    $admins = array_values(array_map('forbes_safe_ident', (array) ($f['admin_cols'] ?? [])));
+    $banned = array_values(array_filter(
+        array_map('strval', (array) ($f['exclude_nicknames'] ?? [])),
+        static function ($s) { return $s !== ''; }
+    ));
     $limit  = max(1, min(100, (int) $f['limit']));
 
     if (empty($cols)) {
@@ -44,13 +49,39 @@ function forbes_load_top(): array
         $sumExpr = implode(' + ', $parts);
     }
 
+    /* Базовые условия: имя есть и не пустое */
+    $where = ["`{$nameC}` IS NOT NULL", "`{$nameC}` <> ''"];
+
+    /* Фильтр админов: исключаем всех, у кого хоть одна из admin_cols > 0 */
+    if (!empty($admins)) {
+        $aParts = [];
+        foreach ($admins as $c) {
+            $aParts[] = "COALESCE(`{$c}`, 0)";
+        }
+        $where[] = '(' . implode(' + ', $aParts) . ') = 0';
+    }
+
+    /* Фильтр чёрного списка ников */
+    $params = [];
+    if (!empty($banned)) {
+        $ph = [];
+        foreach ($banned as $i => $nick) {
+            $key = ':nick' . $i;
+            $ph[] = $key;
+            $params[$key] = $nick;
+        }
+        $where[] = "`{$nameC}` NOT IN (" . implode(', ', $ph) . ')';
+    }
+
     $sql = "SELECT `{$nameC}` AS name, `{$skinC}` AS skin, ({$sumExpr}) AS total
             FROM `{$table}`
-            WHERE `{$nameC}` IS NOT NULL AND `{$nameC}` <> ''
+            WHERE " . implode(' AND ', $where) . "
             ORDER BY total DESC
             LIMIT {$limit}";
 
-    $rows = db_pdo()->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = db_pdo()->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $out = [];
     foreach ($rows as $r) {
