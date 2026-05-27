@@ -2,14 +2,9 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/config.php';
+
 define('TG_BOT_TOKEN', '8670784710:AAGCD5qSQt9hlksAQxg4qf8uCw9n-HnPaFw');
-define('DB_HOST_LOCAL', '127.0.0.1');
-define('DB_HOST_REMOTE', '80.242.59.112');
-define('DB_PORT', 3306);
-define('DB_NAME', 'gs339375');
-define('DB_USER', 'gs339375');
-define('DB_PASS', 'jVe4sI57zjfS');
-define('DB_CHARSET', 'utf8mb4');
 define('LOGI_GAME_INGEST_TOKEN', 'Lgi_g9K4mPvq2NwX8bRtz1YhFc0JsAe6UdBo7');
 
 $admin_ids = [6394731003, 987654321];
@@ -71,9 +66,12 @@ function db_ensure_telegram_table(PDO $pdo): void
 
 function db_connect(): PDO
 {
+    global $config;
+    $cfg = $config['db'];
+
     $hosts = [
-        ['host' => DB_HOST_REMOTE, 'port' => DB_PORT],
-        ['host' => DB_HOST_LOCAL, 'port' => DB_PORT],
+        ['host' => $cfg['host_remote'], 'port' => (int) $cfg['port']],
+        ['host' => $cfg['host_local'],  'port' => (int) $cfg['port']],
     ];
     $last = null;
     foreach ($hosts as $row) {
@@ -82,12 +80,13 @@ function db_connect(): PDO
                 'mysql:host=%s;port=%d;dbname=%s;charset=%s',
                 $row['host'],
                 $row['port'],
-                DB_NAME,
-                DB_CHARSET
+                $cfg['name'],
+                $cfg['charset']
             );
-            $pdo = new PDO($dsn, DB_USER, DB_PASS, [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            $pdo = new PDO($dsn, $cfg['user'], $cfg['pass'], [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_TIMEOUT            => (int) ($cfg['timeout'] ?? 10),
             ]);
             db_ensure_telegram_table($pdo);
             return $pdo;
