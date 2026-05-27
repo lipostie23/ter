@@ -115,17 +115,8 @@ if ($isGiven) {
 function giveCoinsToPlayer(string $nickname, int $coins): bool
 {
     try {
-        // Увеличено время ожидания и добавлены флаги стабильности соединения
-        $pdo = new PDO(
-            'mysql:host=80.242.59.112;dbname=gs339375;charset=utf8',
-            'gs339375',
-            'jVe4sI57zjfS',
-            [
-                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_TIMEOUT            => 15,
-                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8",
-            ]
-        );
+        // Подключение берётся из config.php (db_pdo), хосты remote/local + fallback внутри.
+        $pdo = db_pdo();
 
         // Приводим к нижнему регистру саму переменную, чтобы разгрузить SQL-запрос
         $lowercaseNick = mb_strtolower($nickname, 'UTF-8');
