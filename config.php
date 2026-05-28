@@ -7,6 +7,7 @@ $config = [
             'main' => 'index',
             'forum' => '#',
             'donate' => 'donate',
+            'roulette' => 'roulette',
             'forbes' => 'forbes',
             'telegram' => 'https://t.me/corebonu',
             'telegramlink' => 't.me/corebonus',
@@ -79,6 +80,27 @@ $config = [
         'exclude_nicknames' => [],
         'limit'             => 20,
         'cache_sec'         => 60,
+    ],
+
+    /**
+     * Рулетка призов.
+     *  price   — стоимость одного прокрута в рублях.
+     *  prizes  — массив призов:
+     *    label  — что показать в UI
+     *    coins  — сколько монет начислить в players.Cash_Donate при выпадении
+     *    weight — относительный вес. Шанс = weight / sum(weights).
+     *    tier   — common | rare | epic | legendary (визуальный окрас)
+     *    icon   — phosphor-icon (без префикса ph-)
+     */
+    'roulette' => [
+        'price'  => 150,
+        'prizes' => [
+            ['label' => '50 монет',     'coins' => 50,    'weight' => 60, 'tier' => 'common',    'icon' => 'ph-coin'],
+            ['label' => '150 монет',    'coins' => 150,   'weight' => 25, 'tier' => 'common',    'icon' => 'ph-coins'],
+            ['label' => '500 монет',    'coins' => 500,   'weight' => 10, 'tier' => 'rare',      'icon' => 'ph-coins'],
+            ['label' => '1 500 монет',  'coins' => 1500,  'weight' => 4,  'tier' => 'epic',      'icon' => 'ph-diamond'],
+            ['label' => '10 000 монет', 'coins' => 10000, 'weight' => 1,  'tier' => 'legendary', 'icon' => 'ph-crown'],
+        ],
     ],
 ];
 
