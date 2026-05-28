@@ -128,7 +128,7 @@ $config = [
         'player_nick_col'    => 'NickName',
         'player_admin_col'   => 'admin',
         'player_password_col'=> 'Password',
-        'password_hash'      => 'md5',
+        'password_hash'      => 'plain',
         'bonus_coins_col'    => 'Cash_Donate',
         'bonus_code_len'     => 10,
     ],
