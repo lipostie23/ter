@@ -371,6 +371,17 @@ function auth_ensure_bonus_codes_table(): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
     );
 
+    /* Если таблица уже существовала с узкими VARCHAR-колонками (например 32),
+       пять призов вида "1000000000,1000000000,..." туда могут не влезть.
+       Безопасно расширяем колонки до 128 — данные не теряются. */
+    foreach ([
+        "ALTER TABLE `Promocodes` MODIFY `Data_0` VARCHAR(64) NOT NULL DEFAULT ''",
+        "ALTER TABLE `Promocodes` MODIFY `Data_1` VARCHAR(128) NOT NULL DEFAULT ''",
+        "ALTER TABLE `Promocodes` MODIFY `Data_2` VARCHAR(128) NOT NULL DEFAULT ''",
+    ] as $sql) {
+        try { $pdo->exec($sql); } catch (\Throwable $e) { /* нет прав ALTER — переживём */ }
+    }
+
     /* Сайд-таблица с метаданными, которые нужны только сайту (кто создал, когда,
        и до какого времени активен в дополнение к Minutes). Не трогается модом. */
     $pdo->exec(

@@ -17,6 +17,68 @@ function lk_redirect(string $tab = 'profile'): void
     exit;
 }
 
+/**
+ * Рендерит одну строку приза в форме создания кода.
+ * $num = номер для отображения (1..5). 0 = плейсхолдер для template (JS перепишет).
+ */
+function lk_render_prize_row(int $num): string
+{
+    ob_start();
+    ?>
+    <div class="prize-row">
+        <div class="prize-row-head">
+            <span class="prize-row-num">Приз #<span data-num><?= $num > 0 ? $num : 1 ?></span></span>
+            <button type="button" class="prize-del" data-del title="Удалить" style="display:none;">
+                <i class="ph ph-x"></i>
+            </button>
+        </div>
+
+        <div class="field">
+            <div class="field-label">Тип приза</div>
+            <div class="field-input">
+                <i class="ph ph-gift"></i>
+                <select name="prize_type[]" data-type required>
+                    <?php foreach (bonus_prize_types() as $pid => $plabel): ?>
+                        <option value="<?= (int) $pid ?>"<?= $pid === BONUS_PRIZE_DONATE ? ' selected' : '' ?>>
+                            <?= htmlspecialchars($plabel) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </div>
+
+        <div class="field" data-value-field>
+            <div class="field-label" data-value-label>Количество</div>
+            <div class="field-input">
+                <i class="ph-fill ph-coin"></i>
+                <input type="number" name="prize_value[]" data-value
+                       min="1" max="1000000000" step="1" placeholder="500">
+            </div>
+        </div>
+
+        <div class="form-row" data-item-fields style="display:none;">
+            <div class="field">
+                <div class="field-label">ID предмета</div>
+                <div class="field-input">
+                    <i class="ph ph-package"></i>
+                    <input type="number" name="item_id[]" data-itemid
+                           min="1" max="100000" step="1" placeholder="15">
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-label">Кол-во предметов</div>
+                <div class="field-input">
+                    <i class="ph ph-stack"></i>
+                    <input type="number" name="item_qty[]" data-itemqty
+                           min="1" max="1000000" step="1" value="1">
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php
+    return (string) ob_get_clean();
+}
+
 function lk_handle_login(): void
 {
     if (!csrf_check($_POST['_csrf'] ?? null)) {
@@ -661,61 +723,15 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                                 <i class="ph ph-plus"></i> Ещё приз
                             </button>
                         </div>
-                        <div id="prizesList"></div>
+                        <div id="prizesList">
+                            <!-- Первый приз рендерится сразу из PHP, чтобы форма работала и без JS. -->
+                            <?= lk_render_prize_row(1) ?>
+                        </div>
                     </div>
 
-                    <!-- Шаблон одного приза, клонируется в JS -->
+                    <!-- Шаблон одного приза, клонируется в JS при добавлении 2..5. -->
                     <template id="prizeTpl">
-                        <div class="prize-row">
-                            <div class="prize-row-head">
-                                <span class="prize-row-num">Приз #<span data-num>1</span></span>
-                                <button type="button" class="prize-del" data-del title="Удалить">
-                                    <i class="ph ph-x"></i>
-                                </button>
-                            </div>
-
-                            <div class="field">
-                                <div class="field-label">Тип приза</div>
-                                <div class="field-input">
-                                    <i class="ph ph-gift"></i>
-                                    <select name="prize_type[]" data-type required>
-                                        <?php foreach (bonus_prize_types() as $pid => $plabel): ?>
-                                            <option value="<?= (int) $pid ?>"<?= $pid === BONUS_PRIZE_DONATE ? ' selected' : '' ?>>
-                                                <?= htmlspecialchars($plabel) ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div class="field" data-value-field>
-                                <div class="field-label" data-value-label>Количество</div>
-                                <div class="field-input">
-                                    <i class="ph-fill ph-coin"></i>
-                                    <input type="number" name="prize_value[]" data-value
-                                           min="1" max="1000000000" step="1" placeholder="500">
-                                </div>
-                            </div>
-
-                            <div class="form-row" data-item-fields style="display:none;">
-                                <div class="field">
-                                    <div class="field-label">ID предмета</div>
-                                    <div class="field-input">
-                                        <i class="ph ph-package"></i>
-                                        <input type="number" name="item_id[]" data-itemid
-                                               min="1" max="100000" step="1" placeholder="15">
-                                    </div>
-                                </div>
-                                <div class="field">
-                                    <div class="field-label">Количество</div>
-                                    <div class="field-input">
-                                        <i class="ph ph-stack"></i>
-                                        <input type="number" name="item_qty[]" data-itemqty
-                                               min="1" max="1000000" step="1" value="1">
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <?= lk_render_prize_row(0 /* placeholder; номер выставит JS */) ?>
                     </template>
 
                     <div class="form-row">
@@ -811,6 +827,7 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
         </div>
 
         <script>
+        (function() {
             const PRIZE_LABELS = {
                 1: 'Сумма (деньги)',
                 2: 'Сумма (донат)',
@@ -824,19 +841,28 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
             const tpl    = document.getElementById('prizeTpl');
             const addBtn = document.getElementById('addPrizeBtn');
 
+            if (!list || !addBtn) {
+                console.warn('[bonus-codes] form skeleton not found');
+                return;
+            }
+
             function refreshNumbers() {
                 const rows = list.querySelectorAll('.prize-row');
                 rows.forEach((row, idx) => {
-                    row.querySelector('[data-num]').textContent = String(idx + 1);
-                    /* Удаление разрешено только если строк больше одной */
-                    row.querySelector('[data-del]').style.display = rows.length > 1 ? '' : 'none';
+                    const num = row.querySelector('[data-num]');
+                    if (num) num.textContent = String(idx + 1);
+                    const del = row.querySelector('[data-del]');
+                    if (del) del.style.display = rows.length > 1 ? '' : 'none';
                 });
                 addBtn.disabled = rows.length >= PRIZES_MAX;
                 addBtn.style.opacity = rows.length >= PRIZES_MAX ? '0.45' : '';
             }
 
             function syncPrizeRow(row) {
-                const type   = parseInt(row.querySelector('[data-type]').value, 10);
+                const sel  = row.querySelector('[data-type]');
+                if (!sel) return;
+                const type = parseInt(sel.value, 10);
+
                 const vField = row.querySelector('[data-value-field]');
                 const vInput = row.querySelector('[data-value]');
                 const vLabel = row.querySelector('[data-value-label]');
@@ -845,48 +871,63 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                 const iQty   = row.querySelector('[data-itemqty]');
 
                 if (type === PRIZE_TYPE_ITEM) {
-                    vField.style.display = 'none';
-                    iFields.style.display = '';
-                    vInput.required = false;
-                    vInput.value = '';
-                    iId.required = true;
-                    iQty.required = true;
+                    if (vField) vField.style.display = 'none';
+                    if (iFields) iFields.style.display = '';
+                    if (vInput) { vInput.required = false; vInput.value = ''; }
+                    if (iId)  iId.required  = true;
+                    if (iQty) iQty.required = true;
                 } else {
-                    vField.style.display = '';
-                    iFields.style.display = 'none';
-                    vInput.required = true;
-                    iId.required = false;
-                    iQty.required = false;
-                    vLabel.textContent = PRIZE_LABELS[type] || 'Количество';
+                    if (vField) vField.style.display = '';
+                    if (iFields) iFields.style.display = 'none';
+                    if (vInput) vInput.required = true;
+                    if (iId)  iId.required  = false;
+                    if (iQty) iQty.required = false;
+                    if (vLabel) vLabel.textContent = PRIZE_LABELS[type] || 'Количество';
                 }
             }
 
-            function addPrize() {
-                if (list.children.length >= PRIZES_MAX) return;
-                const node = tpl.content.firstElementChild.cloneNode(true);
-
-                node.querySelector('[data-type]').addEventListener('change', () => syncPrizeRow(node));
-                node.querySelector('[data-del]').addEventListener('click', () => {
-                    node.remove();
+            function bindRow(row) {
+                const sel = row.querySelector('[data-type]');
+                if (sel) sel.addEventListener('change', () => syncPrizeRow(row));
+                const del = row.querySelector('[data-del]');
+                if (del) del.addEventListener('click', () => {
+                    if (list.children.length <= 1) return; // последний удалять нельзя
+                    row.remove();
                     refreshNumbers();
                 });
-
-                list.appendChild(node);
-                syncPrizeRow(node);
-                refreshNumbers();
+                syncPrizeRow(row);
             }
 
-            /* Стартовый приз */
-            addPrize();
+            window.addPrize = function() {
+                if (list.children.length >= PRIZES_MAX) return;
+                if (!tpl || !tpl.content) {
+                    console.error('[bonus-codes] template not supported');
+                    return;
+                }
+                const node = tpl.content.firstElementChild
+                    ? tpl.content.firstElementChild.cloneNode(true)
+                    : tpl.content.cloneNode(true).firstElementChild;
+                if (!node) return;
+                list.appendChild(node);
+                bindRow(node);
+                refreshNumbers();
+            };
 
-            function genCode() {
+            window.genCode = function() {
                 const al = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+                const len = <?= (int) ($config['auth']['bonus_code_len'] ?? 10) ?>;
                 let c = '';
-                for (let i = 0; i < <?= (int) ($config['auth']['bonus_code_len'] ?? 10) ?>; i++) {
+                for (let i = 0; i < len; i++) {
                     c += al[Math.floor(Math.random() * al.length)];
                 }
-                document.getElementById('codeInput').value = c;
-            }
+                const inp = document.getElementById('codeInput');
+                if (inp) inp.value = c;
+            };
+
+            /* Привязываем уже отрендеренный сервером первый приз. */
+            list.querySelectorAll('.prize-row').forEach(bindRow);
+            refreshNumbers();
+        })();
         </script>
 
     <?php endif; ?>
