@@ -299,6 +299,25 @@ function bonus_prize_describe(int $type, int $value, int $extra): string
 }
 
 /**
+ * Описание сразу набора призов кода: "1 500 — Донат + Предмет ID 15 ×5".
+ * На вход — три параллельных массива из 10 слотов (как из bonus_unpack_data).
+ */
+function bonus_prizes_describe(array $types, array $vals, array $amts): string
+{
+    $parts = [];
+    for ($i = 0; $i < 10; $i++) {
+        $t = (int) ($types[$i] ?? 0);
+        if ($t <= 0) continue;
+        if ($t === BONUS_PRIZE_ITEM) {
+            $parts[] = bonus_prize_describe($t, (int) ($vals[$i] ?? 0), (int) ($amts[$i] ?? 0));
+        } else {
+            $parts[] = bonus_prize_describe($t, (int) ($amts[$i] ?? 0), 0);
+        }
+    }
+    return $parts ? implode(' + ', $parts) : '—';
+}
+
+/**
  * Сериализует массив значений в формат `Promocodes.Data_X`: ровно 10 чисел через
  * запятую, c обязательной завершающей запятой ("1,4,4,4,0,0,0,0,0,0,").
  * Если массив короче 10 — добивается нулями. Если длиннее — обрезается.
@@ -524,20 +543,22 @@ function bonus_get(string $code): ?array
     return bonus_row_to_legacy($row, $meta, (int) ($row['used_count'] ?? 0));
 }
 
+/* Сколько призов можно навесить на один код (UI ограничен этим числом). */
+const BONUS_PRIZES_MAX = 5;
+
 /**
- * Создаёт бонус-код с произвольным типом приза.
+ * Создаёт бонус-код с одним или несколькими призами (до BONUS_PRIZES_MAX).
  *
- *  $prizeType  — одна из констант BONUS_PRIZE_*
- *  $prizeValue — для денег/доната/exp/слотов это «количество», для предмета это item ID
- *  $prizeExtra — используется только для предмета (количество); для остальных — игнорируется
+ *  $prizes — массив из 1..BONUS_PRIZES_MAX элементов, каждый вида:
+ *      ['type' => int (BONUS_PRIZE_*),
+ *       'value' => int (для предмета — ID; иначе сумма/кол-во),
+ *       'extra' => int (для предмета — количество; иначе 0)]
  *
  * @throws RuntimeException
  */
 function bonus_create(
     string $code,
-    int $prizeType,
-    int $prizeValue,
-    int $prizeExtra,
+    array $prizes,
     int $usageLimit,
     ?string $expiresAt,
     string $admin
@@ -550,22 +571,44 @@ function bonus_create(
     if (!preg_match('/^[A-Z0-9_-]+$/', $code)) {
         throw new RuntimeException('Код содержит недопустимые символы. Разрешены A–Z, 0–9, _, -.');
     }
-    if (!array_key_exists($prizeType, bonus_prize_types())) {
-        throw new RuntimeException('Неизвестный тип приза.');
+
+    if (count($prizes) < 1) {
+        throw new RuntimeException('Нужно указать хотя бы один приз.');
+    }
+    if (count($prizes) > BONUS_PRIZES_MAX) {
+        throw new RuntimeException('Максимум ' . BONUS_PRIZES_MAX . ' призов в одном коде.');
     }
 
-    if ($prizeType === BONUS_PRIZE_ITEM) {
-        if ($prizeValue < 1 || $prizeValue > 100000) {
-            throw new RuntimeException('ID предмета должен быть в диапазоне 1–100000.');
+    /* Валидируем каждый приз и одновременно собираем три параллельных массива
+       для Data_0 / Data_1 / Data_2 в формате Promocodes. */
+    $types = $vals = $amts = [];
+    foreach ($prizes as $idx => $p) {
+        $pType  = (int) ($p['type']  ?? 0);
+        $pValue = (int) ($p['value'] ?? 0);
+        $pExtra = (int) ($p['extra'] ?? 0);
+
+        if (!array_key_exists($pType, bonus_prize_types())) {
+            throw new RuntimeException('Приз #' . ($idx + 1) . ': неизвестный тип.');
         }
-        if ($prizeExtra < 1 || $prizeExtra > 1000000) {
-            throw new RuntimeException('Количество предметов — от 1 до 1 000 000.');
+
+        if ($pType === BONUS_PRIZE_ITEM) {
+            if ($pValue < 1 || $pValue > 100000) {
+                throw new RuntimeException('Приз #' . ($idx + 1) . ': ID предмета должен быть в диапазоне 1–100000.');
+            }
+            if ($pExtra < 1 || $pExtra > 1000000) {
+                throw new RuntimeException('Приз #' . ($idx + 1) . ': количество предметов — от 1 до 1 000 000.');
+            }
+            $types[] = $pType;
+            $vals[]  = $pValue;
+            $amts[]  = $pExtra;
+        } else {
+            if ($pValue < 1 || $pValue > 1000000000) {
+                throw new RuntimeException('Приз #' . ($idx + 1) . ': количество должно быть от 1 до 1 000 000 000.');
+            }
+            $types[] = $pType;
+            $vals[]  = 0;
+            $amts[]  = $pValue;
         }
-    } else {
-        if ($prizeValue < 1 || $prizeValue > 1000000000) {
-            throw new RuntimeException('Количество должно быть от 1 до 1 000 000 000.');
-        }
-        $prizeExtra = 0;
     }
 
     if ($usageLimit < 1 || $usageLimit > 1000000) {
@@ -578,17 +621,10 @@ function bonus_create(
         throw new RuntimeException('Код уже существует.');
     }
 
-    /* Раскладываем приз в формат Promocodes (10 слотов).
-       Слот 0 = текущий приз; остальные 9 = нули. */
-    if ($prizeType === BONUS_PRIZE_ITEM) {
-        $data0 = bonus_pack_data([$prizeType]);
-        $data1 = bonus_pack_data([$prizeValue]);   // ID предмета
-        $data2 = bonus_pack_data([$prizeExtra]);   // количество
-    } else {
-        $data0 = bonus_pack_data([$prizeType]);
-        $data1 = bonus_pack_data([0]);
-        $data2 = bonus_pack_data([$prizeValue]);   // сумма / кол-во
-    }
+    /* Раскладываем призы в формат Promocodes (всегда 10 слотов, лишние — нули). */
+    $data0 = bonus_pack_data($types);
+    $data1 = bonus_pack_data($vals);
+    $data2 = bonus_pack_data($amts);
 
     /* Minutes: если задан expires_at — переводим в минуты от текущего момента,
        чтобы игровой мод тоже знал срок жизни. 0 = бессрочно. */
