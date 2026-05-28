@@ -2,31 +2,51 @@
 require_once 'config.php';
 
 $nickname    = trim($_POST['nickname']    ?? '');
-$amount      = (int)($_POST['amount']    ?? 0);
 $server_name = trim($_POST['server_name'] ?? $config['core']['server']['name']);
-$method      = trim($_POST['method']     ?? 'sbp');
+$method      = trim($_POST['method']      ?? 'sbp');
+$purpose     = ($_POST['purpose'] ?? 'donate') === 'roulette' ? 'roulette' : 'donate';
 
-if (!$nickname || $amount < 10 || $amount > 100000) {
-    header('Location: donate.php?error=invalid');
+if (!$nickname || !preg_match('/^[A-Za-z0-9_]{2,24}$/', $nickname)) {
+    header('Location: ' . ($purpose === 'roulette' ? 'roulette.php?error=invalid' : 'donate.php?error=invalid'));
     exit;
 }
 
 $pt = $config['platega'];
+
+if ($purpose === 'roulette') {
+    // Цену для рулетки задаёт сервер — клиент её не подменит.
+    $amount = (int) ($config['roulette']['price'] ?? 150);
+    $coins  = 0; // монеты определит призовая логика в вебхуке
+    $description = "Рулетка · {$nickname} · {$server_name} · {$amount} {$pt['currency']}";
+} else {
+    $amount = (int) ($_POST['amount'] ?? 0);
+    if ($amount < 10 || $amount > 100000) {
+        header('Location: donate.php?error=invalid');
+        exit;
+    }
+    $coins = $amount * (int) $pt['rate'];
+    $description = "Донат {$nickname} · {$server_name} · {$amount}₽";
+}
 
 $orderId = 'order_' . time() . '_' . bin2hex(random_bytes(4));
 
 session_start();
 $_SESSION['pending_payment'] = [
     'order_id'   => $orderId,
+    'purpose'    => $purpose,
     'nickname'   => $nickname,
     'server'     => $server_name,
     'amount'     => $amount,
-    'coins'      => $amount * $pt['rate'],
+    'coins'      => $coins,
     'method'     => $method,
     'created_at' => date('Y-m-d H:i:s'),
 ];
 
 $paymentMethodId = 2;
+
+$returnUrl = $purpose === 'roulette'
+    ? 'https://core-bonus.ru/roulette.php?spin=' . rawurlencode($orderId)
+    : $pt['return_url'];
 
 $payload = [
     'paymentMethod'  => $paymentMethodId,
@@ -34,14 +54,15 @@ $payload = [
         'amount'   => $amount,
         'currency' => $pt['currency'],
     ],
-    'description' => "Донат {$nickname} · {$server_name} · {$amount}₽",
-    'return'      => $pt['return_url'],
+    'description' => $description,
+    'return'      => $returnUrl,
     'failedUrl'   => $pt['failed_url'],
     'payload'     => json_encode([
         'order_id' => $orderId,
+        'purpose'  => $purpose,
         'nickname' => $nickname,
         'server'   => $server_name,
-        'coins'    => $amount * $pt['rate'],
+        'coins'    => $coins,
         'method'   => $method,
     ]),
 ];
@@ -70,15 +91,15 @@ if ($httpCode === 200 && isset($data['redirect'])) {
     $_SESSION['pending_payment']['transaction_id'] = $data['transactionId'] ?? '';
     header('Location: ' . $data['redirect']);
     exit;
-} else {
-    $logDir = __DIR__ . '/logs';
-    @mkdir($logDir, 0755, true);
-    file_put_contents(
-        $logDir . '/payment_errors.log',
-        date('Y-m-d H:i:s') . " | HTTP {$httpCode} | cURL: {$curlError} | " . $response . "\n",
-        FILE_APPEND | LOCK_EX
-    );
-
-    header('Location: donate_failed.php?reason=error');
-    exit;
 }
+
+$logDir = __DIR__ . '/logs';
+@mkdir($logDir, 0755, true);
+file_put_contents(
+    $logDir . '/payment_errors.log',
+    date('Y-m-d H:i:s') . " | purpose={$purpose} | HTTP {$httpCode} | cURL: {$curlError} | " . $response . "\n",
+    FILE_APPEND | LOCK_EX
+);
+
+header('Location: donate_failed.php?reason=error');
+exit;

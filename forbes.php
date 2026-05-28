@@ -16,7 +16,7 @@ function forbes_safe_ident(string $s): string
 
 function forbes_format_money(int $v): string
 {
-    return '$ ' . number_format($v, 0, '.', ' ');
+    return number_format($v, 0, '.', ' ') . ' ₽';
 }
 
 /**

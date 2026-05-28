@@ -3,9 +3,26 @@ require_once 'config.php';
 
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
+header('Cache-Control: public, max-age=5');
 
 $host = $config['core']['server']['host'];
 $port = $config['core']['server']['port'];
+
+/* ----------------------------------------------------------------------
+ * Кэш на диске: повторные запросы в течение TTL не дёргают SAMP.
+ * Защищает от DoS-amplification и снижает нагрузку на сокет.
+ * -------------------------------------------------------------------- */
+$cacheTtl  = 5; // секунд
+$cacheDir  = __DIR__ . '/cache';
+$cacheFile = $cacheDir . '/online.json';
+
+if (is_file($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTtl) {
+    $cached = @file_get_contents($cacheFile);
+    if ($cached !== false && $cached !== '') {
+        echo $cached;
+        exit;
+    }
+}
 
 function getSampOnline($host, $port, $timeout = 2) {
     $ip = gethostbyname($host);
@@ -52,17 +69,25 @@ function getSampOnline($host, $port, $timeout = 2) {
 $online = getSampOnline($host, $port);
 
 if ($online === null) {
-    echo json_encode(['online' => 0, 'error' => 'no_response']);
-} else {
-    $logFile = __DIR__ . '/online_log.json';
+    $payload = json_encode(['online' => 0, 'error' => 'no_response']);
+    echo $payload;
+    exit;
+}
 
-    $log = [];
-    if (file_exists($logFile)) {
-        $log = json_decode(file_get_contents($logFile), true) ?? [];
-    }
+/* ----------------------------------------------------------------------
+ *  Запись истории онлайна (только при изменении значения).
+ *  flock на чтение+запись, чтобы избежать race condition.
+ * -------------------------------------------------------------------- */
+$logFile = __DIR__ . '/cache/online_log.json';
+@mkdir(dirname($logFile), 0755, true);
+
+$fp = @fopen($logFile, 'c+');
+if ($fp && flock($fp, LOCK_EX)) {
+    $raw = stream_get_contents($fp);
+    $log = $raw ? (json_decode($raw, true) ?? []) : [];
 
     $last = end($log);
-    $lastOnline = $last ? $last['online'] : -1;
+    $lastOnline = $last ? (int) $last['online'] : -1;
 
     if ($online !== $lastOnline) {
         $log[] = [
@@ -71,13 +96,22 @@ if ($online === null) {
             'time'      => date('Y-m-d H:i:s'),
             'timestamp' => time(),
         ];
-
         if (count($log) > 10000) {
             $log = array_slice($log, -10000);
         }
 
-        file_put_contents($logFile, json_encode($log, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, json_encode($log, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
     }
 
-    echo json_encode(['online' => $online]);
+    flock($fp, LOCK_UN);
+    fclose($fp);
 }
+
+$payload = json_encode(['online' => $online]);
+
+@mkdir($cacheDir, 0755, true);
+@file_put_contents($cacheFile, $payload, LOCK_EX);
+
+echo $payload;

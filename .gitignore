@@ -1,0 +1,20 @@
+# Локальные секреты (не должны попадать в git)
+config.local.php
+.env
+.env.*
+
+# Кэш и логи (генерируются runtime'ом)
+cache/*
+logs/*
+*.log
+online_log.json
+
+# ...кроме .htaccess, который должен быть в репо для защиты этих папок
+!cache/.htaccess
+!logs/.htaccess
+
+# Локальные служебные файлы
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

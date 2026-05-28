@@ -7,6 +7,7 @@ $config = [
             'main' => 'index',
             'forum' => '#',
             'donate' => 'donate',
+            'roulette' => 'roulette',
             'forbes' => 'forbes',
             'telegram' => 'https://t.me/corebonu',
             'telegramlink' => 't.me/corebonus',
@@ -80,12 +81,67 @@ $config = [
         'limit'             => 20,
         'cache_sec'         => 60,
     ],
+
+    /**
+     * Безопасность.
+     *
+     *  game_ingest_token  — общий секрет для запросов от игрового мода и связанных
+     *                       endpoint'ов в site.php. Должен совпадать с тем, что мод
+     *                       шлёт в payload (token=...).
+     *  allow_legacy_game_get — если true, site.php?type=...&chatId=...&nickname=...
+     *                       работает БЕЗ токена (legacy). ОПАСНО: открывает фишинг
+     *                       через домен сайта. Включай только если игровой мод
+     *                       пока не умеет передавать токен.
+     *  debug_token        — секрет для site.php?debug_io=1&token=... Пусто = endpoint выключен.
+     */
+    'security' => [
+        'game_ingest_token'     => 'Lgi_g9K4mPvq2NwX8bRtz1YhFc0JsAe6UdBo7',
+        'allow_legacy_game_get' => true,
+        'debug_token'           => '',
+    ],
+
+    /**
+     * Рулетка призов.
+     *  price   — стоимость одного прокрута в рублях.
+     *  prizes  — массив призов:
+     *    label  — что показать в UI
+     *    coins  — сколько монет начислить в players.Cash_Donate при выпадении
+     *    weight — относительный вес. Шанс = weight / sum(weights).
+     *    tier   — common | rare | epic | legendary (визуальный окрас)
+     *    icon   — phosphor-icon (без префикса ph-)
+     */
+    'roulette' => [
+        'price'  => 150,
+        'prizes' => [
+            ['label' => '50 монет',     'coins' => 50,    'weight' => 60, 'tier' => 'common',    'icon' => 'ph-coin'],
+            ['label' => '150 монет',    'coins' => 150,   'weight' => 25, 'tier' => 'common',    'icon' => 'ph-coins'],
+            ['label' => '500 монет',    'coins' => 500,   'weight' => 10, 'tier' => 'rare',      'icon' => 'ph-coins'],
+            ['label' => '1 500 монет',  'coins' => 1500,  'weight' => 4,  'tier' => 'epic',      'icon' => 'ph-diamond'],
+            ['label' => '10 000 монет', 'coins' => 10000, 'weight' => 1,  'tier' => 'legendary', 'icon' => 'ph-crown'],
+        ],
+    ],
 ];
 
 /**
  * Создаёт PDO-соединение с БД. Сначала пробует удалённый хост, при неудаче — локальный.
  * Используется во всех местах, где нужен доступ к базе.
  */
+/**
+ * Локальные оверрайды (например, реальные пароли БД, секреты Platega, токены TG).
+ * Этот файл лежит в .gitignore и НЕ попадает в публичный репозиторий.
+ * Создай config.local.php рядом и положи туда чувствительные значения, например:
+ *
+ *   <?php
+ *   $config['db']['pass'] = 'настоящий_пароль';
+ *   $config['platega']['secret'] = 'настоящий_секрет';
+ *   $config['telegram_bot']['token'] = '...';
+ *   $config['security']['game_ingest_token'] = '...';
+ */
+$localOverride = __DIR__ . '/config.local.php';
+if (is_file($localOverride)) {
+    require $localOverride;
+}
+
 if (!function_exists('db_connect_from_config')) {
     function db_connect_from_config(): PDO
     {

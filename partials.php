@@ -307,10 +307,11 @@ function render_header(string $active = ''): void
 {
     global $c, $l;
     $items = [
-        'main'   => ['Главная',  $l['main']],
-        'forum'  => ['Форум',    $l['forum']],
-        'donate' => ['Донат',    $l['donate']],
-        'forbes' => ['Forbes',   $l['forbes']],
+        'main'     => ['Главная',  $l['main']],
+        'forum'    => ['Форум',    $l['forum']],
+        'donate'   => ['Донат',    $l['donate']],
+        'roulette' => ['Рулетка',  $l['roulette']],
+        'forbes'   => ['Forbes',   $l['forbes']],
     ];
     ?>
     <header class="site-header">
