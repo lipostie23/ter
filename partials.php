@@ -312,7 +312,14 @@ function render_header(string $active = ''): void
         'donate'   => ['Донат',    $l['donate']],
         'roulette' => ['Рулетка',  $l['roulette']],
         'forbes'   => ['Forbes',   $l['forbes']],
+        'cabinet'  => ['Кабинет',  $l['cabinet']],
     ];
+
+    $authedNick = ''; 
+    if (function_exists('auth_user')) {
+        $u = auth_user();
+        if ($u) $authedNick = (string) $u['nickname'];
+    }
     ?>
     <header class="site-header">
         <a href="<?= htmlspecialchars($l['main']) ?>" class="logo">
@@ -326,9 +333,15 @@ function render_header(string $active = ''): void
             <?php endforeach; ?>
         </nav>
         <div class="header-right">
-            <a href="<?= htmlspecialchars($l['donate']) ?>" class="header-cta">
-                <i class="ph ph-coin"></i> Пополнить
-            </a>
+            <?php if ($authedNick !== ''): ?>
+                <a href="<?= htmlspecialchars($l['cabinet']) ?>" class="header-cta">
+                    <i class="ph-fill ph-user"></i> <?= htmlspecialchars($authedNick) ?>
+                </a>
+            <?php else: ?>
+                <a href="<?= htmlspecialchars($l['donate']) ?>" class="header-cta">
+                    <i class="ph ph-coin"></i> Пополнить
+                </a>
+            <?php endif; ?>
         </div>
         <button class="burger-menu" type="button" aria-label="Меню" onclick="document.getElementById('navLinks').classList.toggle('open')"><i class="ph ph-list"></i></button>
     </header>
