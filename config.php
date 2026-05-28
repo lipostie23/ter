@@ -9,6 +9,7 @@ $config = [
             'donate' => 'donate',
             'roulette' => 'roulette',
             'forbes' => 'forbes',
+            'cabinet' => 'lk',
             'telegram' => 'https://t.me/corebonu',
             'telegramlink' => 't.me/corebonus',
             'vk_support' => 'https://t.me/faggotvetmo',
@@ -76,7 +77,7 @@ $config = [
         'name_col'          => 'NickName',
         'skin_col'          => 'Skin',
         'money_cols'        => ['Cash', 'Bank'],
-        'admin_cols'        => ['AdminLevel'],
+        'admin_cols'        => ['admin'],
         'exclude_nicknames' => [],
         'limit'             => 20,
         'cache_sec'         => 60,
@@ -98,6 +99,38 @@ $config = [
         'game_ingest_token'     => 'Lgi_g9K4mPvq2NwX8bRtz1YhFc0JsAe6UdBo7',
         'allow_legacy_game_get' => true,
         'debug_token'           => '',
+    ],
+
+    /**
+     * Личный кабинет.
+     *
+     *  admin_min_level     — для входа в админ-панель ник должен иметь admin_col > этого значения.
+     *  session_max_idle    — секунд бездействия до выхода из сессии.
+     *  player_table        — таблица игроков.
+     *  player_nick_col     — колонка ника.
+     *  player_admin_col    — колонка админ-уровня.
+     *  player_password_col — колонка с (захэшированным) паролем игрового аккаунта.
+     *  password_hash       — формат хранения пароля. Поддерживается:
+     *                          'md5'        — md5(password) === stored
+     *                          'sha1'       — sha1(password) === stored
+     *                          'sha256'     — hash('sha256', password) === stored
+     *                          'whirlpool'  — hash('whirlpool', password) === stored
+     *                          'bcrypt'     — password_verify (стандартный PHP)
+     *                          'plain'      — на свой страх и риск
+     *                        Если у тебя пароль хэшируется иначе (md5+соль, например) — скажи, добавлю.
+     *  bonus_coins_col     — колонка, в которую активация бонус-кода начисляет монеты.
+     *  bonus_code_len      — длина авто-генерированного кода (если админ не задаёт сам).
+     */
+    'auth' => [
+        'admin_min_level'    => 100,
+        'session_max_idle'   => 86400,
+        'player_table'       => 'players',
+        'player_nick_col'    => 'NickName',
+        'player_admin_col'   => 'admin',
+        'player_password_col'=> 'Password',
+        'password_hash'      => 'md5',
+        'bonus_coins_col'    => 'Cash_Donate',
+        'bonus_code_len'     => 10,
     ],
 
     /**
