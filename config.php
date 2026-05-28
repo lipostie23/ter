@@ -119,28 +119,42 @@ $config = [
      *                          'plain'      — на свой страх и риск
      *                        Если у тебя пароль хэшируется иначе (md5+соль, например) — скажи, добавлю.
      *  bonus_coins_col     — колонка, в которую активация бонус-кода с типом «Донат» начисляет монеты.
-     *                        Используется и для legacy-кодов без явного типа приза.
      *  bonus_money_col     — колонка для типа «Деньги».
      *  bonus_exp_col       — колонка для типа «EXP».
      *  bonus_house_slots_col — колонка для типа «Слот на имущество».
-     *  bonus_items_table   — таблица очереди выдачи предметов (тип «Предмет»). Игровой мод
-     *                        периодически забирает оттуда нерасданные строки и выдаёт игроку.
+     *  bonus_items_table   — очередь выдачи предметов (тип «Предмет»), которую разбирает игровой мод.
      *  bonus_code_len      — длина авто-генерированного кода (если админ не задаёт сам).
+     *
+     *  promo_table             — таблица бонус-кодов, которой пользуется игровой мод (как на скрине phpMyAdmin).
+     *                            Колонки: ID auto, Name, Data_0, Data_1, Data_2, Activation, Minutes.
+     *                            Data_0 — типы призов через запятую (10 штук, нули в пустых слотах).
+     *                            Data_1 — ID предмета (тип 4) или 0.
+     *                            Data_2 — количество.
+     *  promo_used_table        — таблица учёта активаций (та же, что DELETE-ит игровой мод).
+     *  promo_used_name_col     — название колонки с именем кода в promo_used_table.
+     *  promo_used_nick_col     — название колонки с ником игрока в promo_used_table.
+     *  promo_used_date_col     — колонка с датой активации (можно пустую строку — тогда не пишется).
      */
     'auth' => [
-        'admin_min_level'      => 100,
-        'session_max_idle'     => 86400,
-        'player_table'         => 'players',
-        'player_nick_col'      => 'NickName',
-        'player_admin_col'     => 'admin',
-        'player_password_col'  => 'Password',
-        'password_hash'        => 'plain',
-        'bonus_coins_col'      => 'Cash_Donate',
-        'bonus_money_col'      => 'Cash',
-        'bonus_exp_col'        => 'Score',
-        'bonus_house_slots_col'=> 'HouseSlots',
-        'bonus_items_table'    => 'BonusPendingItems',
-        'bonus_code_len'       => 10,
+        'admin_min_level'       => 100,
+        'session_max_idle'      => 86400,
+        'player_table'          => 'players',
+        'player_nick_col'       => 'NickName',
+        'player_admin_col'      => 'admin',
+        'player_password_col'   => 'Password',
+        'password_hash'         => 'plain',
+        'bonus_coins_col'       => 'Cash_Donate',
+        'bonus_money_col'       => 'Cash',
+        'bonus_exp_col'         => 'Score',
+        'bonus_house_slots_col' => 'HouseSlots',
+        'bonus_items_table'     => 'BonusPendingItems',
+        'bonus_code_len'        => 10,
+
+        'promo_table'           => 'Promocodes',
+        'promo_used_table'      => 'Promocodes_Used',
+        'promo_used_name_col'   => 'Name',
+        'promo_used_nick_col'   => 'NickName',
+        'promo_used_date_col'   => 'Date',
     ],
 
     /**

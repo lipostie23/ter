@@ -17,68 +17,6 @@ function lk_redirect(string $tab = 'profile'): void
     exit;
 }
 
-/**
- * Рендерит одну строку приза в форме создания кода.
- * $num = номер для отображения (1..5). 0 = плейсхолдер для template (JS перепишет).
- */
-function lk_render_prize_row(int $num): string
-{
-    ob_start();
-    ?>
-    <div class="prize-row">
-        <div class="prize-row-head">
-            <span class="prize-row-num">Приз #<span data-num><?= $num > 0 ? $num : 1 ?></span></span>
-            <button type="button" class="prize-del" data-del title="Удалить" style="display:none;">
-                <i class="ph ph-x"></i>
-            </button>
-        </div>
-
-        <div class="field">
-            <div class="field-label">Тип приза</div>
-            <div class="field-input">
-                <i class="ph ph-gift"></i>
-                <select name="prize_type[]" data-type required>
-                    <?php foreach (bonus_prize_types() as $pid => $plabel): ?>
-                        <option value="<?= (int) $pid ?>"<?= $pid === BONUS_PRIZE_DONATE ? ' selected' : '' ?>>
-                            <?= htmlspecialchars($plabel) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-        </div>
-
-        <div class="field" data-value-field>
-            <div class="field-label" data-value-label>Количество</div>
-            <div class="field-input">
-                <i class="ph-fill ph-coin"></i>
-                <input type="number" name="prize_value[]" data-value
-                       min="1" max="1000000000" step="1" placeholder="500">
-            </div>
-        </div>
-
-        <div class="form-row" data-item-fields style="display:none;">
-            <div class="field">
-                <div class="field-label">ID предмета</div>
-                <div class="field-input">
-                    <i class="ph ph-package"></i>
-                    <input type="number" name="item_id[]" data-itemid
-                           min="1" max="100000" step="1" placeholder="15">
-                </div>
-            </div>
-            <div class="field">
-                <div class="field-label">Кол-во предметов</div>
-                <div class="field-input">
-                    <i class="ph ph-stack"></i>
-                    <input type="number" name="item_qty[]" data-itemqty
-                           min="1" max="1000000" step="1" value="1">
-                </div>
-            </div>
-        </div>
-    </div>
-    <?php
-    return (string) ob_get_clean();
-}
-
 function lk_handle_login(): void
 {
     if (!csrf_check($_POST['_csrf'] ?? null)) {
@@ -177,49 +115,36 @@ function lk_handle_create_code(): void
     $rawCode = (string) ($_POST['code'] ?? '');
     $code    = $rawCode === '' ? bonus_generate_code($defaultLen) : bonus_normalize_code($rawCode);
 
-    /* Принимаем массив призов: prize_type[], prize_value[], item_id[], item_qty[].
-       Берём только заполненные слоты, до BONUS_PRIZES_MAX штук. */
-    $types = (array) ($_POST['prize_type']  ?? []);
-    $vals  = (array) ($_POST['prize_value'] ?? []);
-    $itIds = (array) ($_POST['item_id']     ?? []);
-    $itQty = (array) ($_POST['item_qty']    ?? []);
-
+    /* Призы приходят как prizes[i][type|amount|item_id|item_qty] (см. форму) */
+    $rawPrizes = $_POST['prizes'] ?? [];
     $prizes = [];
-    $count  = max(count($types), count($vals), count($itIds), count($itQty));
-    for ($i = 0; $i < $count && count($prizes) < BONUS_PRIZES_MAX; $i++) {
-        $t = (int) ($types[$i] ?? 0);
-        if ($t <= 0) continue;
-
-        if ($t === BONUS_PRIZE_ITEM) {
-            $iid = (int) ($itIds[$i] ?? 0);
-            $iq  = (int) ($itQty[$i] ?? 0);
-            if ($iid <= 0 || $iq <= 0) continue;
-            $prizes[] = ['type' => $t, 'value' => $iid, 'extra' => $iq];
-        } else {
-            $v = (int) ($vals[$i] ?? 0);
-            if ($v <= 0) continue;
-            $prizes[] = ['type' => $t, 'value' => $v, 'extra' => 0];
+    if (is_array($rawPrizes)) {
+        foreach ($rawPrizes as $p) {
+            if (!is_array($p)) continue;
+            $type = (int) ($p['type'] ?? 0);
+            if ($type <= 0) continue;
+            if ($type === BONUS_PRIZE_ITEM) {
+                $prizes[] = [
+                    'type'  => $type,
+                    'value' => (int) ($p['item_id']  ?? 0),
+                    'extra' => (int) ($p['item_qty'] ?? 0),
+                ];
+            } else {
+                $prizes[] = [
+                    'type'  => $type,
+                    'value' => (int) ($p['amount'] ?? 0),
+                    'extra' => 0,
+                ];
+            }
         }
     }
 
-    if (empty($prizes)) {
-        flash_set('error', 'Заполните хотя бы один приз.');
-        lk_redirect('admin_codes');
-    }
-
-    $limit   = (int) ($_POST['usage_limit'] ?? 1);
-    $expRaw  = trim((string) ($_POST['expires_at'] ?? ''));
-    $expiresAt = $expRaw === '' ? null : $expRaw;
+    $activation = (int) ($_POST['activation'] ?? 1);
+    $minutes    = (int) ($_POST['minutes']    ?? 0);
 
     try {
-        bonus_create($code, $prizes, $limit, $expiresAt, (string) auth_user()['nickname']);
-
-        $describe = bonus_prizes_describe(
-            array_column($prizes, 'type'),
-            array_map(static fn($p) => $p['type'] === BONUS_PRIZE_ITEM ? $p['value'] : 0, $prizes),
-            array_map(static fn($p) => $p['type'] === BONUS_PRIZE_ITEM ? $p['extra'] : $p['value'], $prizes)
-        );
-        flash_set('success', 'Код создан: ' . $code . ' (' . $describe . ')');
+        bonus_create($code, $prizes, $activation, $minutes, (string) auth_user()['nickname']);
+        flash_set('success', 'Код создан: ' . $code . ' (' . bonus_prizes_describe($prizes) . ')');
     } catch (\Throwable $e) {
         flash_set('error', $e->getMessage());
     }
@@ -335,6 +260,61 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
     }
     .field-input select option { color: #111; }
 
+    .prizes-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+    .prize-slot {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        padding: 10px;
+    }
+    .prize-slot-row {
+        display: grid;
+        grid-template-columns: 1.1fr 1fr auto;
+        gap: 8px;
+        align-items: center;
+    }
+    .prize-slot select,
+    .prize-slot input {
+        width: 100%;
+        background: rgba(0,0,0,0.25);
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 8px;
+        padding: 8px 10px;
+        color: var(--text-primary);
+        font: 600 13px \'Inter\', sans-serif;
+        outline: none;
+    }
+    .prize-slot select:focus,
+    .prize-slot input:focus { border-color: var(--accent); }
+    .prize-amount-wrap, .prize-item-wrap { display: flex; gap: 6px; min-width: 0; }
+    .prize-item-wrap input { flex: 1; min-width: 0; }
+    .prize-remove {
+        background: rgba(255,80,80,0.12);
+        border: 1px solid rgba(255,80,80,0.3);
+        color: #ff8080;
+        border-radius: 8px;
+        width: 34px; height: 34px;
+        display: inline-flex; align-items: center; justify-content: center;
+        cursor: pointer;
+    }
+    .prize-remove:hover { background: rgba(255,80,80,0.2); }
+
+    .btn-secondary {
+        background: rgba(255,255,255,0.06);
+        border: 1px dashed rgba(255,255,255,0.18);
+        color: var(--text-primary);
+        padding: 8px 14px;
+        border-radius: 10px;
+        font: 600 13px \'Inter\', sans-serif;
+        cursor: pointer;
+        display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+    .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .c-prize-line { font: 600 13px \'Inter\', sans-serif; color: var(--text-primary); }
+    .c-prize-line + .c-prize-line { margin-top: 2px; }
+
     .pwd-toggle {
         background: none; border: none; cursor: pointer;
         color: var(--text-muted); font-size: 16px; padding: 4px;
@@ -448,54 +428,6 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
 
     .codes-list-empty { padding: 36px 18px; text-align: center; color: var(--text-muted); font-size: 13px; }
     .codes-list-empty i { font-size: 28px; display: block; margin-bottom: 10px; }
-
-    /* ---------- Prizes block ---------- */
-    .prizes-block { margin-bottom: 14px; }
-    .prizes-head {
-        display: flex; align-items: center; justify-content: space-between;
-        font-size: 11px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
-        color: var(--text-muted);
-        margin-bottom: 10px; padding: 0 4px;
-    }
-    .prize-add {
-        display: inline-flex; align-items: center; gap: 6px;
-        background: rgba(0,0,0,0.05);
-        color: var(--text-primary);
-        border: none; border-radius: 9px;
-        padding: 6px 10px;
-        font: 600 11px \'Inter\', sans-serif; letter-spacing: 0.04em; text-transform: uppercase;
-        cursor: pointer;
-        transition: 0.2s;
-    }
-    .prize-add:hover:not(:disabled) { background: var(--accent); color: var(--text-inverse); }
-    .prize-add:disabled { cursor: not-allowed; }
-
-    .prize-row {
-        position: relative;
-        padding: 14px 14px 4px;
-        border: 1px dashed rgba(0,0,0,0.10);
-        border-radius: 12px;
-        background: rgba(255,255,255,0.35);
-        margin-bottom: 12px;
-    }
-    .prize-row-head {
-        display: flex; align-items: center; justify-content: space-between;
-        margin-bottom: 6px;
-    }
-    .prize-row-num {
-        font: 700 10.5px \'Inter\', sans-serif;
-        letter-spacing: 0.18em; text-transform: uppercase;
-        color: var(--text-muted);
-    }
-    .prize-del {
-        background: rgba(201,57,84,0.10); color: var(--danger);
-        border: none; border-radius: 8px;
-        width: 26px; height: 26px;
-        display: inline-flex; align-items: center; justify-content: center;
-        cursor: pointer; font-size: 12px;
-        transition: 0.2s;
-    }
-    .prize-del:hover { background: var(--danger); color: #fff; }
 
     .copy-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
@@ -716,37 +648,27 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                         <div class="copy-hint">Пусто = сгенерируется автоматически (длина из конфига).</div>
                     </div>
 
-                    <div class="prizes-block">
-                        <div class="prizes-head">
-                            <span>Призы (до <?= BONUS_PRIZES_MAX ?>)</span>
-                            <button type="button" class="prize-add" onclick="addPrize()" id="addPrizeBtn">
-                                <i class="ph ph-plus"></i> Ещё приз
-                            </button>
-                        </div>
-                        <div id="prizesList">
-                            <!-- Первый приз рендерится сразу из PHP, чтобы форма работала и без JS. -->
-                            <?= lk_render_prize_row(1) ?>
-                        </div>
+                    <div class="field">
+                        <div class="field-label">Призы (до <?= BONUS_PRIZE_MAX_SLOTS ?> штук)</div>
+                        <div id="prizesList" class="prizes-list"></div>
+                        <button type="button" id="addPrizeBtn" class="btn-secondary">
+                            <i class="ph ph-plus"></i> Добавить приз
+                        </button>
                     </div>
-
-                    <!-- Шаблон одного приза, клонируется в JS при добавлении 2..5. -->
-                    <template id="prizeTpl">
-                        <?= lk_render_prize_row(0 /* placeholder; номер выставит JS */) ?>
-                    </template>
 
                     <div class="form-row">
                         <div class="field">
-                            <div class="field-label">Лимит использований</div>
+                            <div class="field-label">Лимит активаций</div>
                             <div class="field-input">
                                 <i class="ph ph-users-three"></i>
-                                <input type="number" name="usage_limit" required min="1" max="1000000" step="1" value="1">
+                                <input type="number" name="activation" required min="1" max="1000000" step="1" value="1">
                             </div>
                         </div>
                         <div class="field">
-                            <div class="field-label">Истекает (необязательно)</div>
+                            <div class="field-label">Время жизни (минут, 0 = бессрочно)</div>
                             <div class="field-input">
                                 <i class="ph ph-clock"></i>
-                                <input type="datetime-local" name="expires_at">
+                                <input type="number" name="minutes" required min="0" max="525600" step="1" value="0">
                             </div>
                         </div>
                     </div>
@@ -755,6 +677,36 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                         <i class="ph-fill ph-plus-circle"></i> Создать код
                     </button>
                 </form>
+
+                <template id="prizeSlotTpl">
+                    <div class="prize-slot">
+                        <div class="prize-slot-row">
+                            <select class="prize-type" data-prize-type required>
+                                <?php foreach (bonus_prize_types() as $pid => $plabel): ?>
+                                    <option value="<?= (int) $pid ?>"<?= $pid === BONUS_PRIZE_DONATE ? ' selected' : '' ?>>
+                                        <?= htmlspecialchars($plabel) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+
+                            <div class="prize-amount-wrap">
+                                <input type="number" class="prize-amount" data-prize-amount
+                                       min="1" max="1000000000" step="1" placeholder="Количество">
+                            </div>
+
+                            <div class="prize-item-wrap" hidden>
+                                <input type="number" class="prize-item-id" data-prize-item-id
+                                       min="1" max="100000" step="1" placeholder="ID предмета">
+                                <input type="number" class="prize-item-qty" data-prize-item-qty
+                                       min="1" max="1000000" step="1" value="1" placeholder="Кол-во">
+                            </div>
+
+                            <button type="button" class="prize-remove" data-prize-remove title="Удалить">
+                                <i class="ph ph-x"></i>
+                            </button>
+                        </div>
+                    </div>
+                </template>
             </div>
 
             <!-- Правый столбец: таблица -->
@@ -767,24 +719,25 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                 <?php else: ?>
                     <div class="codes-head">
                         <div>Код</div>
-                        <div>Приз</div>
-                        <div>Лимит</div>
-                        <div class="h-meta">Создан</div>
+                        <div>Призы</div>
+                        <div>Активации</div>
+                        <div class="h-meta">Время жизни</div>
                         <div></div>
                     </div>
                     <?php foreach ($adminCodes as $bc): ?>
                         <?php
-                        $expired = $bc['expires_at'] !== null && strtotime($bc['expires_at']) < time();
-                        $isFull  = (int) $bc['used_count'] >= (int) $bc['usage_limit'];
-                        $bcCode  = (string) $bc['code'];
-                        $allDescr = bonus_prizes_describe(
-                            $bc['_types'] ?? [$bc['prize_type'] ?? 0],
-                            $bc['_vals']  ?? [$bc['prize_type'] === BONUS_PRIZE_ITEM ? ($bc['prize_value'] ?? 0) : 0],
-                            $bc['_amts']  ?? [$bc['prize_type'] === BONUS_PRIZE_ITEM ? ($bc['prize_extra'] ?? 0) : ($bc['prize_value'] ?? 0)]
-                        );
-                        $prizeCount = 0;
-                        foreach (($bc['_types'] ?? []) as $tt) { if ((int)$tt > 0) $prizeCount++; }
-                        if ($prizeCount === 0) $prizeCount = 1;
+                        $bcCode    = (string) $bc['Name'];
+                        $bcLimit   = (int) ($bc['Activation'] ?? 0);
+                        $bcUsed    = (int) ($bc['_used_count'] ?? 0);
+                        $bcMinutes = (int) ($bc['Minutes'] ?? 0);
+                        $bcPrizes  = $bc['_prizes'] ?? [];
+
+                        $isFull = $bcLimit > 0 && $bcUsed >= $bcLimit;
+                        $expired = false;
+                        if ($bcMinutes > 0 && !empty($bc['Created'])) {
+                            $createdTs = strtotime((string) $bc['Created']);
+                            $expired = $createdTs && time() > $createdTs + $bcMinutes * 60;
+                        }
                         ?>
                         <div class="code-row">
                             <div>
@@ -794,23 +747,34 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                                         <span style="color:var(--danger);">истёк</span>
                                     <?php elseif ($isFull): ?>
                                         <span style="color:var(--warn);">исчерпан</span>
-                                    <?php elseif ($bc['expires_at']): ?>
-                                        до <?= htmlspecialchars(date('d.m.Y', strtotime($bc['expires_at']))) ?>
+                                    <?php elseif ($bcMinutes > 0): ?>
+                                        <?= (int) $bcMinutes ?> мин
                                     <?php else: ?>
                                         бессрочный
                                     <?php endif; ?>
                                 </div>
                             </div>
-                            <div class="c-coins" title="<?= htmlspecialchars($allDescr) ?>">
-                                <?= htmlspecialchars($allDescr) ?>
-                                <?php if ($prizeCount > 1): ?>
-                                    <div class="c-meta"><?= $prizeCount ?> приз<?= $prizeCount >= 2 && $prizeCount <= 4 ? 'а' : 'ов' ?></div>
+                            <div class="c-coins">
+                                <?php if (empty($bcPrizes)): ?>
+                                    <span class="c-meta">—</span>
+                                <?php else: ?>
+                                    <?php foreach ($bcPrizes as $pp): ?>
+                                        <div class="c-prize-line">
+                                            <?= htmlspecialchars(bonus_prize_describe((int) $pp['type'], (int) $pp['value'], (int) $pp['extra'])) ?>
+                                        </div>
+                                    <?php endforeach; ?>
                                 <?php endif; ?>
                             </div>
-                            <div class="c-limit"><?= (int) $bc['used_count'] ?> / <?= (int) $bc['usage_limit'] ?></div>
+                            <div class="c-limit"><?= $bcUsed ?> / <?= $bcLimit ?></div>
                             <div class="c-meta">
-                                <?= htmlspecialchars(date('d.m.Y', strtotime($bc['created_at']))) ?><br>
-                                <?= htmlspecialchars($bc['created_by']) ?>
+                                <?php if ($bcMinutes > 0): ?>
+                                    <?= $bcMinutes ?> мин
+                                <?php else: ?>
+                                    —
+                                <?php endif; ?>
+                                <?php if (!empty($bc['Created'])): ?>
+                                    <br><?= htmlspecialchars(date('d.m.Y H:i', strtotime((string) $bc['Created']))) ?>
+                                <?php endif; ?>
                             </div>
                             <div class="c-act">
                                 <form method="POST" action="lk.php" onsubmit="return confirm('Удалить код «<?= htmlspecialchars($bcCode) ?>»?');" style="display:inline;">
@@ -827,107 +791,85 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
         </div>
 
         <script>
-        (function() {
-            const PRIZE_LABELS = {
-                1: 'Сумма (деньги)',
-                2: 'Сумма (донат)',
-                3: 'Кол-во EXP',
-                5: 'Кол-во слотов'
-            };
-            const PRIZE_TYPE_ITEM = 4;
-            const PRIZES_MAX = <?= (int) BONUS_PRIZES_MAX ?>;
+            (function () {
+                const MAX_SLOTS = <?= BONUS_PRIZE_MAX_SLOTS ?>;
+                const ITEM_TYPE = <?= BONUS_PRIZE_ITEM ?>;
+                const PRIZE_LABELS = {
+                    1: 'Сумма (деньги)',
+                    2: 'Сумма (донат)',
+                    3: 'Кол-во EXP',
+                    5: 'Кол-во слотов'
+                };
 
-            const list   = document.getElementById('prizesList');
-            const tpl    = document.getElementById('prizeTpl');
-            const addBtn = document.getElementById('addPrizeBtn');
+                const list = document.getElementById('prizesList');
+                const tpl  = document.getElementById('prizeSlotTpl');
+                const btn  = document.getElementById('addPrizeBtn');
+                if (!list || !tpl || !btn) return;
 
-            if (!list || !addBtn) {
-                console.warn('[bonus-codes] form skeleton not found');
-                return;
-            }
-
-            function refreshNumbers() {
-                const rows = list.querySelectorAll('.prize-row');
-                rows.forEach((row, idx) => {
-                    const num = row.querySelector('[data-num]');
-                    if (num) num.textContent = String(idx + 1);
-                    const del = row.querySelector('[data-del]');
-                    if (del) del.style.display = rows.length > 1 ? '' : 'none';
-                });
-                addBtn.disabled = rows.length >= PRIZES_MAX;
-                addBtn.style.opacity = rows.length >= PRIZES_MAX ? '0.45' : '';
-            }
-
-            function syncPrizeRow(row) {
-                const sel  = row.querySelector('[data-type]');
-                if (!sel) return;
-                const type = parseInt(sel.value, 10);
-
-                const vField = row.querySelector('[data-value-field]');
-                const vInput = row.querySelector('[data-value]');
-                const vLabel = row.querySelector('[data-value-label]');
-                const iFields= row.querySelector('[data-item-fields]');
-                const iId    = row.querySelector('[data-itemid]');
-                const iQty   = row.querySelector('[data-itemqty]');
-
-                if (type === PRIZE_TYPE_ITEM) {
-                    if (vField) vField.style.display = 'none';
-                    if (iFields) iFields.style.display = '';
-                    if (vInput) { vInput.required = false; vInput.value = ''; }
-                    if (iId)  iId.required  = true;
-                    if (iQty) iQty.required = true;
-                } else {
-                    if (vField) vField.style.display = '';
-                    if (iFields) iFields.style.display = 'none';
-                    if (vInput) vInput.required = true;
-                    if (iId)  iId.required  = false;
-                    if (iQty) iQty.required = false;
-                    if (vLabel) vLabel.textContent = PRIZE_LABELS[type] || 'Количество';
+                function reindex() {
+                    const slots = list.querySelectorAll('.prize-slot');
+                    slots.forEach((slot, i) => {
+                        slot.dataset.idx = String(i);
+                        slot.querySelector('[data-prize-type]').name        = `prizes[${i}][type]`;
+                        slot.querySelector('[data-prize-amount]').name      = `prizes[${i}][amount]`;
+                        slot.querySelector('[data-prize-item-id]').name     = `prizes[${i}][item_id]`;
+                        slot.querySelector('[data-prize-item-qty]').name    = `prizes[${i}][item_qty]`;
+                    });
+                    btn.disabled = slots.length >= MAX_SLOTS;
                 }
-            }
 
-            function bindRow(row) {
-                const sel = row.querySelector('[data-type]');
-                if (sel) sel.addEventListener('change', () => syncPrizeRow(row));
-                const del = row.querySelector('[data-del]');
-                if (del) del.addEventListener('click', () => {
-                    if (list.children.length <= 1) return; // последний удалять нельзя
-                    row.remove();
-                    refreshNumbers();
-                });
-                syncPrizeRow(row);
-            }
+                function syncSlot(slot) {
+                    const type = parseInt(slot.querySelector('[data-prize-type]').value, 10);
+                    const amountWrap = slot.querySelector('.prize-amount-wrap');
+                    const itemWrap   = slot.querySelector('.prize-item-wrap');
+                    const amountInp  = slot.querySelector('[data-prize-amount]');
+                    const itemId     = slot.querySelector('[data-prize-item-id]');
+                    const itemQty    = slot.querySelector('[data-prize-item-qty]');
 
-            window.addPrize = function() {
-                if (list.children.length >= PRIZES_MAX) return;
-                if (!tpl || !tpl.content) {
-                    console.error('[bonus-codes] template not supported');
-                    return;
+                    if (type === ITEM_TYPE) {
+                        amountWrap.hidden = true;
+                        itemWrap.hidden   = false;
+                        amountInp.required = false; amountInp.disabled = true;
+                        itemId.required = true;     itemId.disabled = false;
+                        itemQty.required = true;    itemQty.disabled = false;
+                    } else {
+                        amountWrap.hidden = false;
+                        itemWrap.hidden   = true;
+                        amountInp.required = true;  amountInp.disabled = false;
+                        amountInp.placeholder = PRIZE_LABELS[type] || 'Количество';
+                        itemId.required = false;    itemId.disabled = true;
+                        itemQty.required = false;   itemQty.disabled = true;
+                    }
                 }
-                const node = tpl.content.firstElementChild
-                    ? tpl.content.firstElementChild.cloneNode(true)
-                    : tpl.content.cloneNode(true).firstElementChild;
-                if (!node) return;
-                list.appendChild(node);
-                bindRow(node);
-                refreshNumbers();
-            };
 
-            window.genCode = function() {
+                function addSlot() {
+                    if (list.children.length >= MAX_SLOTS) return;
+                    const node = tpl.content.firstElementChild.cloneNode(true);
+                    list.appendChild(node);
+
+                    node.querySelector('[data-prize-type]').addEventListener('change', () => syncSlot(node));
+                    node.querySelector('[data-prize-remove]').addEventListener('click', () => {
+                        node.remove();
+                        if (list.children.length === 0) addSlot();
+                        reindex();
+                    });
+
+                    syncSlot(node);
+                    reindex();
+                }
+
+                btn.addEventListener('click', addSlot);
+                addSlot(); // стартуем с одного слота
+            })();
+
+            function genCode() {
                 const al = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-                const len = <?= (int) ($config['auth']['bonus_code_len'] ?? 10) ?>;
                 let c = '';
-                for (let i = 0; i < len; i++) {
+                for (let i = 0; i < <?= (int) ($config['auth']['bonus_code_len'] ?? 10) ?>; i++) {
                     c += al[Math.floor(Math.random() * al.length)];
                 }
-                const inp = document.getElementById('codeInput');
-                if (inp) inp.value = c;
-            };
-
-            /* Привязываем уже отрендеренный сервером первый приз. */
-            list.querySelectorAll('.prize-row').forEach(bindRow);
-            refreshNumbers();
-        })();
+                document.getElementById('codeInput').value = c;
+            }
         </script>
 
     <?php endif; ?>
