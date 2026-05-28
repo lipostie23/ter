@@ -91,7 +91,7 @@ function lk_handle_redeem(): void
 
     $r = bonus_redeem($code, (string) $u['nickname']);
     if ($r['ok']) {
-        flash_set('success', 'Код активирован: + ' . number_format($r['coins'], 0, '.', ' ') . ' монет на аккаунт.');
+        flash_set('success', 'Код активирован: ' . $r['reward'] . '. ' . $r['message']);
     } else {
         flash_set('error', $r['message']);
     }
@@ -115,14 +115,23 @@ function lk_handle_create_code(): void
     $rawCode = (string) ($_POST['code'] ?? '');
     $code    = $rawCode === '' ? bonus_generate_code($defaultLen) : bonus_normalize_code($rawCode);
 
-    $coins   = (int) ($_POST['coins'] ?? 0);
+    $prizeType = (int) ($_POST['prize_type'] ?? 0);
+
+    if ($prizeType === BONUS_PRIZE_ITEM) {
+        $prizeValue = (int) ($_POST['item_id']  ?? 0);
+        $prizeExtra = (int) ($_POST['item_qty'] ?? 0);
+    } else {
+        $prizeValue = (int) ($_POST['prize_value'] ?? 0);
+        $prizeExtra = 0;
+    }
+
     $limit   = (int) ($_POST['usage_limit'] ?? 1);
     $expRaw  = trim((string) ($_POST['expires_at'] ?? ''));
     $expiresAt = $expRaw === '' ? null : $expRaw;
 
     try {
-        bonus_create($code, $coins, $limit, $expiresAt, (string) auth_user()['nickname']);
-        flash_set('success', 'Код создан: ' . $code);
+        bonus_create($code, $prizeType, $prizeValue, $prizeExtra, $limit, $expiresAt, (string) auth_user()['nickname']);
+        flash_set('success', 'Код создан: ' . $code . ' (' . bonus_prize_describe($prizeType, $prizeValue, $prizeExtra) . ')');
     } catch (\Throwable $e) {
         flash_set('error', $e->getMessage());
     }
@@ -227,6 +236,16 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
         color: var(--text-primary);
     }
     .field-input input::placeholder { color: var(--text-muted); font-weight: 500; }
+
+    .field-input select {
+        flex: 1; min-width: 0;
+        background: transparent; border: none; outline: none;
+        font: 600 14px \'Inter\', sans-serif;
+        color: var(--text-primary);
+        appearance: none;
+        cursor: pointer;
+    }
+    .field-input select option { color: #111; }
 
     .pwd-toggle {
         background: none; border: none; cursor: pointer;
@@ -546,7 +565,7 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                 <div class="acard-eyebrow">Новый код</div>
                 <h3>Создать бонус-код</h3>
 
-                <form method="POST" action="lk.php" autocomplete="off">
+                <form method="POST" action="lk.php" autocomplete="off" id="codeForm">
                     <input type="hidden" name="action" value="create_code">
                     <input type="hidden" name="_csrf" value="<?= htmlspecialchars(csrf_token()) ?>">
 
@@ -561,28 +580,61 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                         <div class="copy-hint">Пусто = сгенерируется автоматически (длина из конфига).</div>
                     </div>
 
-                    <div class="form-row">
+                    <div class="field">
+                        <div class="field-label">Тип приза</div>
+                        <div class="field-input">
+                            <i class="ph ph-gift"></i>
+                            <select name="prize_type" id="prizeType" required>
+                                <?php foreach (bonus_prize_types() as $pid => $plabel): ?>
+                                    <option value="<?= (int) $pid ?>"<?= $pid === BONUS_PRIZE_DONATE ? ' selected' : '' ?>>
+                                        <?= htmlspecialchars($plabel) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Поле «количество» для всех типов кроме предмета -->
+                    <div class="field" id="valueField">
+                        <div class="field-label" id="valueLabel">Количество</div>
+                        <div class="field-input">
+                            <i class="ph-fill ph-coin"></i>
+                            <input type="number" name="prize_value" min="1" max="1000000000" step="1" placeholder="500" id="prizeValue">
+                        </div>
+                    </div>
+
+                    <!-- Поля для предмета: ID + количество (показываются только при выборе «Предмет») -->
+                    <div class="form-row" id="itemFields" style="display:none;">
                         <div class="field">
-                            <div class="field-label">Монеты</div>
+                            <div class="field-label">ID предмета</div>
                             <div class="field-input">
-                                <i class="ph-fill ph-coin"></i>
-                                <input type="number" name="coins" required min="1" max="1000000" step="1" placeholder="500">
+                                <i class="ph ph-package"></i>
+                                <input type="number" name="item_id" min="1" max="100000" step="1" placeholder="15" id="itemId">
                             </div>
                         </div>
                         <div class="field">
-                            <div class="field-label">Лимит</div>
+                            <div class="field-label">Количество</div>
+                            <div class="field-input">
+                                <i class="ph ph-stack"></i>
+                                <input type="number" name="item_qty" min="1" max="1000000" step="1" value="1" id="itemQty">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="field">
+                            <div class="field-label">Лимит использований</div>
                             <div class="field-input">
                                 <i class="ph ph-users-three"></i>
                                 <input type="number" name="usage_limit" required min="1" max="1000000" step="1" value="1">
                             </div>
                         </div>
-                    </div>
-
-                    <div class="field">
-                        <div class="field-label">Истекает (необязательно)</div>
-                        <div class="field-input">
-                            <i class="ph ph-clock"></i>
-                            <input type="datetime-local" name="expires_at">
+                        <div class="field">
+                            <div class="field-label">Истекает (необязательно)</div>
+                            <div class="field-input">
+                                <i class="ph ph-clock"></i>
+                                <input type="datetime-local" name="expires_at">
+                            </div>
                         </div>
                     </div>
 
@@ -602,7 +654,7 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                 <?php else: ?>
                     <div class="codes-head">
                         <div>Код</div>
-                        <div>Монеты</div>
+                        <div>Приз</div>
                         <div>Лимит</div>
                         <div class="h-meta">Создан</div>
                         <div></div>
@@ -612,6 +664,14 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                         $expired = $bc['expires_at'] !== null && strtotime($bc['expires_at']) < time();
                         $isFull  = (int) $bc['used_count'] >= (int) $bc['usage_limit'];
                         $bcCode  = (string) $bc['code'];
+                        $bcType  = (int) ($bc['prize_type']  ?? BONUS_PRIZE_DONATE);
+                        $bcVal   = (int) ($bc['prize_value'] ?? 0);
+                        $bcExtra = (int) ($bc['prize_extra'] ?? 0);
+                        if ($bcVal === 0 && (int) ($bc['coins'] ?? 0) > 0) {
+                            // legacy-код
+                            $bcType = BONUS_PRIZE_DONATE;
+                            $bcVal  = (int) $bc['coins'];
+                        }
                         ?>
                         <div class="code-row">
                             <div>
@@ -628,7 +688,15 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
                                     <?php endif; ?>
                                 </div>
                             </div>
-                            <div class="c-coins"><?= number_format((int) $bc['coins'], 0, '.', ' ') ?></div>
+                            <div class="c-coins">
+                                <?php if ($bcType === BONUS_PRIZE_ITEM): ?>
+                                    Предмет #<?= (int) $bcVal ?>
+                                    <div class="c-meta">×<?= (int) $bcExtra ?></div>
+                                <?php else: ?>
+                                    <?= number_format($bcVal, 0, '.', ' ') ?>
+                                    <div class="c-meta"><?= htmlspecialchars(bonus_prize_label($bcType)) ?></div>
+                                <?php endif; ?>
+                            </div>
                             <div class="c-limit"><?= (int) $bc['used_count'] ?> / <?= (int) $bc['usage_limit'] ?></div>
                             <div class="c-meta">
                                 <?= htmlspecialchars(date('d.m.Y', strtotime($bc['created_at']))) ?><br>
@@ -649,6 +717,43 @@ $adminCodes = ($tab === 'admin_codes' && auth_is_admin()) ? bonus_list(100) : []
         </div>
 
         <script>
+            const PRIZE_LABELS = {
+                1: 'Сумма (деньги)',
+                2: 'Сумма (донат)',
+                3: 'Кол-во EXP',
+                5: 'Кол-во слотов'
+            };
+
+            const prizeType  = document.getElementById('prizeType');
+            const valueField = document.getElementById('valueField');
+            const valueLabel = document.getElementById('valueLabel');
+            const prizeValue = document.getElementById('prizeValue');
+            const itemFields = document.getElementById('itemFields');
+            const itemId     = document.getElementById('itemId');
+            const itemQty    = document.getElementById('itemQty');
+
+            function syncPrizeUI() {
+                const t = parseInt(prizeType.value, 10);
+                if (t === 4) { // Предмет
+                    valueField.style.display = 'none';
+                    itemFields.style.display = '';
+                    prizeValue.required = false;
+                    prizeValue.value = '';
+                    itemId.required  = true;
+                    itemQty.required = true;
+                } else {
+                    valueField.style.display = '';
+                    itemFields.style.display = 'none';
+                    prizeValue.required = true;
+                    itemId.required  = false;
+                    itemQty.required = false;
+                    valueLabel.textContent = PRIZE_LABELS[t] || 'Количество';
+                }
+            }
+
+            prizeType.addEventListener('change', syncPrizeUI);
+            syncPrizeUI();
+
             function genCode() {
                 const al = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
                 let c = '';

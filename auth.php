@@ -256,11 +256,56 @@ function auth_throttle_record(bool $success): void
  *  Бонус-коды
  * ========================================================================= */
 
+/* Типы призов — должны совпадать со значениями в селекте на форме создания */
+const BONUS_PRIZE_MONEY        = 1; // Деньги
+const BONUS_PRIZE_DONATE       = 2; // Донат (Cash_Donate)
+const BONUS_PRIZE_EXP          = 3; // EXP / Score
+const BONUS_PRIZE_ITEM         = 4; // Предмет (id + количество)
+const BONUS_PRIZE_HOUSE_SLOT   = 5; // Слот на имущество
+
+function bonus_prize_label(int $type): string
+{
+    switch ($type) {
+        case BONUS_PRIZE_MONEY:      return 'Деньги';
+        case BONUS_PRIZE_DONATE:     return 'Донат';
+        case BONUS_PRIZE_EXP:        return 'EXP';
+        case BONUS_PRIZE_ITEM:       return 'Предмет';
+        case BONUS_PRIZE_HOUSE_SLOT: return 'Слот на имущество';
+    }
+    return 'Неизвестно';
+}
+
+function bonus_prize_types(): array
+{
+    return [
+        BONUS_PRIZE_MONEY      => 'Деньги',
+        BONUS_PRIZE_DONATE     => 'Донат',
+        BONUS_PRIZE_EXP        => 'EXP',
+        BONUS_PRIZE_ITEM       => 'Предмет',
+        BONUS_PRIZE_HOUSE_SLOT => 'Слот на имущество',
+    ];
+}
+
+/**
+ * Человекочитаемое описание приза для UI: "1 500 монет (Донат)" или "Предмет ID 15 ×5".
+ */
+function bonus_prize_describe(int $type, int $value, int $extra): string
+{
+    if ($type === BONUS_PRIZE_ITEM) {
+        return 'Предмет ID ' . $value . ' ×' . $extra;
+    }
+    $num = number_format($value, 0, '.', ' ');
+    return $num . ' — ' . bonus_prize_label($type);
+}
+
 function auth_ensure_bonus_codes_table(): void
 {
     static $ready = false;
     if ($ready) return;
-    db_pdo()->exec(
+
+    $pdo = db_pdo();
+
+    $pdo->exec(
         'CREATE TABLE IF NOT EXISTS `BonusCodes` (
             `code`        VARCHAR(32) NOT NULL,
             `coins`       INT NOT NULL DEFAULT 0,
@@ -272,7 +317,28 @@ function auth_ensure_bonus_codes_table(): void
             PRIMARY KEY (`code`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
     );
-    db_pdo()->exec(
+
+    /* Миграция: добавляем колонки типа приза, если их ещё нет.
+       MySQL до 8.0.29 не понимает IF NOT EXISTS у ADD COLUMN, поэтому ловим ошибку. */
+    $alters = [
+        "ALTER TABLE `BonusCodes` ADD COLUMN `prize_type`  TINYINT UNSIGNED NOT NULL DEFAULT 2 AFTER `coins`",
+        "ALTER TABLE `BonusCodes` ADD COLUMN `prize_value` INT NOT NULL DEFAULT 0 AFTER `prize_type`",
+        "ALTER TABLE `BonusCodes` ADD COLUMN `prize_extra` INT NOT NULL DEFAULT 0 AFTER `prize_value`",
+    ];
+    foreach ($alters as $sql) {
+        try { $pdo->exec($sql); } catch (\Throwable $e) { /* колонка уже есть */ }
+    }
+
+    /* Перенос legacy-данных: для старых кодов prize_value пуст, но coins>0 — это донат */
+    try {
+        $pdo->exec(
+            "UPDATE `BonusCodes`
+             SET `prize_value` = `coins`, `prize_type` = " . BONUS_PRIZE_DONATE . "
+             WHERE `prize_value` = 0 AND `coins` > 0"
+        );
+    } catch (\Throwable $e) { /* не критично */ }
+
+    $pdo->exec(
         'CREATE TABLE IF NOT EXISTS `BonusCodeUsage` (
             `code` VARCHAR(32) NOT NULL,
             `nickname` VARCHAR(64) NOT NULL,
@@ -280,6 +346,25 @@ function auth_ensure_bonus_codes_table(): void
             PRIMARY KEY (`code`, `nickname`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
     );
+
+    /* Очередь предметов: сюда складываются награды типа «Предмет», игровой мод их вычитывает. */
+    global $config;
+    $itemsTable = auth_safe_ident((string) ($config['auth']['bonus_items_table'] ?? 'BonusPendingItems'));
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS `{$itemsTable}` (
+            `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `nickname` VARCHAR(64) NOT NULL,
+            `item_id` INT NOT NULL,
+            `quantity` INT NOT NULL,
+            `source` VARCHAR(64) NOT NULL DEFAULT '',
+            `created_at` DATETIME NOT NULL,
+            `delivered` TINYINT(1) NOT NULL DEFAULT 0,
+            `delivered_at` DATETIME NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_nick_pending` (`nickname`, `delivered`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    );
+
     $ready = true;
 }
 
@@ -318,10 +403,23 @@ function bonus_get(string $code): ?array
 }
 
 /**
+ * Создаёт бонус-код с произвольным типом приза.
+ *
+ *  $prizeType  — одна из констант BONUS_PRIZE_*
+ *  $prizeValue — для денег/доната/exp/слотов это «количество», для предмета это item ID
+ *  $prizeExtra — используется только для предмета (количество); для остальных — игнорируется
+ *
  * @throws RuntimeException
  */
-function bonus_create(string $code, int $coins, int $usageLimit, ?string $expiresAt, string $admin): void
-{
+function bonus_create(
+    string $code,
+    int $prizeType,
+    int $prizeValue,
+    int $prizeExtra,
+    int $usageLimit,
+    ?string $expiresAt,
+    string $admin
+): void {
     auth_ensure_bonus_codes_table();
 
     if ($code === '' || strlen($code) > 32) {
@@ -330,30 +428,55 @@ function bonus_create(string $code, int $coins, int $usageLimit, ?string $expire
     if (!preg_match('/^[A-Z0-9_-]+$/', $code)) {
         throw new RuntimeException('Код содержит недопустимые символы. Разрешены A–Z, 0–9, _, -.');
     }
-    if ($coins < 1 || $coins > 1000000) {
-        throw new RuntimeException('Сумма монет должна быть от 1 до 1 000 000.');
+    if (!array_key_exists($prizeType, bonus_prize_types())) {
+        throw new RuntimeException('Неизвестный тип приза.');
     }
+
+    if ($prizeType === BONUS_PRIZE_ITEM) {
+        if ($prizeValue < 1 || $prizeValue > 100000) {
+            throw new RuntimeException('ID предмета должен быть в диапазоне 1–100000.');
+        }
+        if ($prizeExtra < 1 || $prizeExtra > 1000000) {
+            throw new RuntimeException('Количество предметов — от 1 до 1 000 000.');
+        }
+    } else {
+        if ($prizeValue < 1 || $prizeValue > 1000000000) {
+            throw new RuntimeException('Количество должно быть от 1 до 1 000 000 000.');
+        }
+        $prizeExtra = 0;
+    }
+
     if ($usageLimit < 1 || $usageLimit > 1000000) {
         throw new RuntimeException('Лимит использований — от 1 до 1 000 000.');
     }
     if ($expiresAt !== null && strtotime($expiresAt) === false) {
         throw new RuntimeException('Неверный формат даты истечения.');
     }
-
     if (bonus_get($code) !== null) {
         throw new RuntimeException('Код уже существует.');
     }
 
+    /* coins оставляем для обратной совместимости с UI/старыми скриптами:
+       для типа «Донат» дублируем туда prize_value, для остальных — 0. */
+    $coinsLegacy = $prizeType === BONUS_PRIZE_DONATE ? $prizeValue : 0;
+
     $stmt = db_pdo()->prepare(
-        "INSERT INTO `BonusCodes` (`code`, `coins`, `usage_limit`, `used_count`, `created_by`, `created_at`, `expires_at`)
-         VALUES (:c, :coins, :lim, 0, :admin, NOW(), :exp)"
+        "INSERT INTO `BonusCodes`
+            (`code`, `coins`, `prize_type`, `prize_value`, `prize_extra`,
+             `usage_limit`, `used_count`, `created_by`, `created_at`, `expires_at`)
+         VALUES
+            (:c, :coins, :ptype, :pval, :pextra,
+             :lim, 0, :admin, NOW(), :exp)"
     );
     $stmt->execute([
-        ':c'     => $code,
-        ':coins' => $coins,
-        ':lim'   => $usageLimit,
-        ':admin' => $admin,
-        ':exp'   => $expiresAt,
+        ':c'      => $code,
+        ':coins'  => $coinsLegacy,
+        ':ptype'  => $prizeType,
+        ':pval'   => $prizeValue,
+        ':pextra' => $prizeExtra,
+        ':lim'    => $usageLimit,
+        ':admin'  => $admin,
+        ':exp'    => $expiresAt,
     ]);
 }
 
@@ -366,24 +489,82 @@ function bonus_delete(string $code): bool
 }
 
 /**
- * Активация: проверяет код, начисляет монеты в players.bonus_coins_col по нику пользователя,
- * создаёт запись в BonusCodeUsage, инкрементит used_count.
- * Возвращает массив [ok=>bool, message=>string, coins=>int].
+ * Внутренний дispatch выдачи приза. Возвращает true при успехе.
+ * Для предметов кладёт запись в очередь BonusPendingItems — игровой мод её разберёт.
+ */
+function bonus_apply_prize(PDO $pdo, string $nickname, int $type, int $value, int $extra, string $code): bool
+{
+    global $config;
+
+    if ($type === BONUS_PRIZE_ITEM) {
+        $itemsTable = auth_safe_ident((string) ($config['auth']['bonus_items_table'] ?? 'BonusPendingItems'));
+        $ins = $pdo->prepare(
+            "INSERT INTO `{$itemsTable}` (`nickname`, `item_id`, `quantity`, `source`, `created_at`)
+             VALUES (:n, :iid, :qty, :src, NOW())"
+        );
+        $ins->execute([
+            ':n'   => $nickname,
+            ':iid' => $value,
+            ':qty' => $extra,
+            ':src' => 'bonus_code:' . $code,
+        ]);
+        return $ins->rowCount() > 0;
+    }
+
+    /* Все остальные типы — это обычный UPDATE одной колонки в players */
+    $colKey = [
+        BONUS_PRIZE_MONEY      => 'bonus_money_col',
+        BONUS_PRIZE_DONATE     => 'bonus_coins_col',
+        BONUS_PRIZE_EXP        => 'bonus_exp_col',
+        BONUS_PRIZE_HOUSE_SLOT => 'bonus_house_slots_col',
+    ][$type] ?? null;
+
+    if ($colKey === null) return false;
+
+    $colName = (string) ($config['auth'][$colKey] ?? '');
+    if ($colName === '') {
+        throw new RuntimeException('В конфиге не задана колонка ' . $colKey . '.');
+    }
+
+    $col   = auth_safe_ident($colName);
+    $tbl   = auth_safe_ident((string) $config['auth']['player_table']);
+    $nickC = auth_safe_ident((string) $config['auth']['player_nick_col']);
+
+    $upd = $pdo->prepare(
+        "UPDATE `{$tbl}`
+         SET `{$col}` = `{$col}` + :v
+         WHERE LOWER(`{$nickC}`) = LOWER(:n)
+         LIMIT 1"
+    );
+    $upd->execute([':v' => $value, ':n' => $nickname]);
+    return $upd->rowCount() > 0;
+}
+
+/**
+ * Активация: проверяет код, выдаёт приз согласно prize_type, отмечает использование.
+ *
+ * Возвращает: [
+ *   'ok'      => bool,
+ *   'message' => string,
+ *   'reward'  => string,        // человекочитаемое описание для UI
+ *   'type'    => int,           // BONUS_PRIZE_*
+ *   'value'   => int,
+ *   'extra'   => int,
+ * ]
  */
 function bonus_redeem(string $code, string $nickname): array
 {
-    global $config;
     auth_ensure_bonus_codes_table();
 
     $row = bonus_get($code);
     if (!$row) {
-        return ['ok' => false, 'message' => 'Код не найден.', 'coins' => 0];
+        return ['ok' => false, 'message' => 'Код не найден.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
     }
     if ($row['expires_at'] !== null && strtotime($row['expires_at']) < time()) {
-        return ['ok' => false, 'message' => 'Срок действия кода истёк.', 'coins' => 0];
+        return ['ok' => false, 'message' => 'Срок действия кода истёк.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
     }
     if ((int) $row['used_count'] >= (int) $row['usage_limit']) {
-        return ['ok' => false, 'message' => 'Лимит использований исчерпан.', 'coins' => 0];
+        return ['ok' => false, 'message' => 'Лимит использований исчерпан.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
     }
 
     /* Один и тот же ник не может активировать тот же код дважды */
@@ -392,18 +573,24 @@ function bonus_redeem(string $code, string $nickname): array
     );
     $check->execute([':c' => $code, ':n' => $nickname]);
     if ($check->fetchColumn()) {
-        return ['ok' => false, 'message' => 'Вы уже активировали этот код.', 'coins' => 0];
+        return ['ok' => false, 'message' => 'Вы уже активировали этот код.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
     }
 
-    $coins   = (int) $row['coins'];
-    $coinCol = auth_safe_ident((string) $config['auth']['bonus_coins_col']);
-    $tbl     = auth_safe_ident((string) $config['auth']['player_table']);
-    $nickCol = auth_safe_ident((string) $config['auth']['player_nick_col']);
+    $type  = (int) ($row['prize_type']  ?? BONUS_PRIZE_DONATE);
+    $value = (int) ($row['prize_value'] ?? 0);
+    $extra = (int) ($row['prize_extra'] ?? 0);
+
+    /* Legacy: если старый код без prize_type, fallback на coins как «Донат» */
+    if ($value === 0 && (int) ($row['coins'] ?? 0) > 0) {
+        $type  = BONUS_PRIZE_DONATE;
+        $value = (int) $row['coins'];
+        $extra = 0;
+    }
 
     $pdo = db_pdo();
     $pdo->beginTransaction();
     try {
-        /* Атомарно инкрементим used_count, проверяя лимит ещё раз */
+        /* Атомарно инкрементим used_count, ещё раз проверяя лимит */
         $upd = $pdo->prepare(
             "UPDATE `BonusCodes`
              SET `used_count` = `used_count` + 1
@@ -412,7 +599,7 @@ function bonus_redeem(string $code, string $nickname): array
         $upd->execute([':c' => $code]);
         if ($upd->rowCount() === 0) {
             $pdo->rollBack();
-            return ['ok' => false, 'message' => 'Лимит использований исчерпан.', 'coins' => 0];
+            return ['ok' => false, 'message' => 'Лимит использований исчерпан.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
         }
 
         $usage = $pdo->prepare(
@@ -420,22 +607,21 @@ function bonus_redeem(string $code, string $nickname): array
         );
         $usage->execute([':c' => $code, ':n' => $nickname]);
 
-        $give = $pdo->prepare(
-            "UPDATE `{$tbl}`
-             SET `{$coinCol}` = `{$coinCol}` + :coins
-             WHERE LOWER(`{$nickCol}`) = LOWER(:n)
-             LIMIT 1"
-        );
-        $give->execute([':coins' => $coins, ':n' => $nickname]);
-        if ($give->rowCount() === 0) {
+        if (!bonus_apply_prize($pdo, $nickname, $type, $value, $extra, $code)) {
             $pdo->rollBack();
-            return ['ok' => false, 'message' => 'Игровой аккаунт не найден.', 'coins' => 0];
+            return ['ok' => false, 'message' => 'Игровой аккаунт не найден.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
         }
 
         $pdo->commit();
-        return ['ok' => true, 'message' => 'Зачислено!', 'coins' => $coins];
+
+        $reward = bonus_prize_describe($type, $value, $extra);
+        $msg    = $type === BONUS_PRIZE_ITEM
+            ? 'Предмет добавлен в очередь выдачи. Зайди в игру.'
+            : 'Зачислено!';
+
+        return ['ok' => true, 'message' => $msg, 'reward' => $reward, 'type' => $type, 'value' => $value, 'extra' => $extra];
     } catch (\Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        return ['ok' => false, 'message' => 'Ошибка БД, попробуйте ещё раз.', 'coins' => 0];
+        return ['ok' => false, 'message' => 'Ошибка БД, попробуйте ещё раз.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
     }
 }

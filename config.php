@@ -118,19 +118,29 @@ $config = [
      *                          'bcrypt'     — password_verify (стандартный PHP)
      *                          'plain'      — на свой страх и риск
      *                        Если у тебя пароль хэшируется иначе (md5+соль, например) — скажи, добавлю.
-     *  bonus_coins_col     — колонка, в которую активация бонус-кода начисляет монеты.
+     *  bonus_coins_col     — колонка, в которую активация бонус-кода с типом «Донат» начисляет монеты.
+     *                        Используется и для legacy-кодов без явного типа приза.
+     *  bonus_money_col     — колонка для типа «Деньги».
+     *  bonus_exp_col       — колонка для типа «EXP».
+     *  bonus_house_slots_col — колонка для типа «Слот на имущество».
+     *  bonus_items_table   — таблица очереди выдачи предметов (тип «Предмет»). Игровой мод
+     *                        периодически забирает оттуда нерасданные строки и выдаёт игроку.
      *  bonus_code_len      — длина авто-генерированного кода (если админ не задаёт сам).
      */
     'auth' => [
-        'admin_min_level'    => 100,
-        'session_max_idle'   => 86400,
-        'player_table'       => 'players',
-        'player_nick_col'    => 'NickName',
-        'player_admin_col'   => 'admin',
-        'player_password_col'=> 'Password',
-        'password_hash'      => 'plain',
-        'bonus_coins_col'    => 'Cash_Donate',
-        'bonus_code_len'     => 10,
+        'admin_min_level'      => 100,
+        'session_max_idle'     => 86400,
+        'player_table'         => 'players',
+        'player_nick_col'      => 'NickName',
+        'player_admin_col'     => 'admin',
+        'player_password_col'  => 'Password',
+        'password_hash'        => 'plain',
+        'bonus_coins_col'      => 'Cash_Donate',
+        'bonus_money_col'      => 'Cash',
+        'bonus_exp_col'        => 'Score',
+        'bonus_house_slots_col'=> 'HouseSlots',
+        'bonus_items_table'    => 'BonusPendingItems',
+        'bonus_code_len'       => 10,
     ],
 
     /**
