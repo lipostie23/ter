@@ -78,29 +78,36 @@ if ($isGiven) {
     // Создаем метку, что платеж обработан успешно
     file_put_contents($dupFile, time());
 
-    // Пишем в общий лог донатов (теперь, если он упадет, игрок всё равно УЖЕ получил монеты)
+    // Пишем в общий лог донатов с flock'ом, чтобы параллельные вебхуки не теряли записи.
     $logFile = __DIR__ . '/logs/donations.json';
-    $log = [];
-    if (file_exists($logFile)) {
-        $log = json_decode(@file_get_contents($logFile), true) ?? [];
-    }
-    
-    $log[] = [
-        'payment_id' => $paymentId,
-        'order_id'   => $orderId,
-        'nickname'   => $nickname,
-        'server'     => $server,
-        'amount_rub' => $amount,
-        'coins'      => $coins,
-        'currency'   => $currency,
-        'date'       => $paidAt,
-        'timestamp'  => time(),
-    ];
+    @mkdir(dirname($logFile), 0755, true);
+    $fp = @fopen($logFile, 'c+');
+    if ($fp && flock($fp, LOCK_EX)) {
+        $raw = stream_get_contents($fp);
+        $log = $raw ? (json_decode($raw, true) ?? []) : [];
 
-    if (count($log) > 5000) { // Снизили лимит до 5000, чтобы JSON не весил по 10+ МБ
-        $log = array_slice($log, -5000);
+        $log[] = [
+            'payment_id' => $paymentId,
+            'order_id'   => $orderId,
+            'nickname'   => $nickname,
+            'server'     => $server,
+            'amount_rub' => $amount,
+            'coins'      => $coins,
+            'currency'   => $currency,
+            'date'       => $paidAt,
+            'timestamp'  => time(),
+        ];
+
+        if (count($log) > 5000) { // Лимит, чтобы JSON не разрастался до десятков МБ
+            $log = array_slice($log, -5000);
+        }
+
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, json_encode($log, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        flock($fp, LOCK_UN);
+        fclose($fp);
     }
-    @file_put_contents($logFile, json_encode($log, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
 
     // Отправка уведомления в Telegram
     $tg = $config['telegram_bot'];
@@ -172,15 +179,23 @@ function writeLog(array $entry, string $filename): void
     $logFile = $logDir . '/' . $filename;
     @mkdir($logDir, 0755, true);
 
-    $log = [];
-    if (file_exists($logFile)) {
-        $log = json_decode(@file_get_contents($logFile), true) ?? [];
-    }
+    $fp = @fopen($logFile, 'c+');
+    if (!$fp) return;
+    if (!flock($fp, LOCK_EX)) { fclose($fp); return; }
+
+    $raw = stream_get_contents($fp);
+    $log = $raw ? (json_decode($raw, true) ?? []) : [];
     $log[] = $entry;
     if (count($log) > 2000) {
         $log = array_slice($log, -2000);
     }
-    @file_put_contents($logFile, json_encode($log, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, json_encode($log, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+    flock($fp, LOCK_UN);
+    fclose($fp);
 }
 
 function sendTelegram(string $token, string $chatId, string $text): void

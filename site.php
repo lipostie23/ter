@@ -5,7 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/config.php';
 
 define('TG_BOT_TOKEN', '8670784710:AAGCD5qSQt9hlksAQxg4qf8uCw9n-HnPaFw');
-define('LOGI_GAME_INGEST_TOKEN', 'Lgi_g9K4mPvq2NwX8bRtz1YhFc0JsAe6UdBo7');
+define('LOGI_GAME_INGEST_TOKEN', $config['security']['game_ingest_token'] ?? '');
 
 $admin_ids = [6394731003, 987654321];
 $channels = ['@fear_dev'];
@@ -789,6 +789,12 @@ $rawInput = file_get_contents('php://input') ?: '';
 tg_webhook_log('request method=' . ($_SERVER['REQUEST_METHOD'] ?? '-') . ' query=' . ($_SERVER['QUERY_STRING'] ?? '-') . ' raw_len=' . strlen($rawInput));
 
 if (isset($_GET['debug_io']) && $_GET['debug_io'] === '1') {
+    $debugTok = (string) ($config['security']['debug_token'] ?? '');
+    $given    = (string) ($_GET['token'] ?? '');
+    if ($debugTok === '' || !hash_equals($debugTok, $given)) {
+        http_response_code(404);
+        exit;
+    }
     runIoDebug();
 }
 
@@ -801,6 +807,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 if (!handleParamsGameFromMod()) {
     if (!handleLogIngestRequest()) {
+        // Прямой GET-вход без зашифрованного payload'а с токеном.
+        // По умолчанию отказываем — иначе любой может слать фейковые TG-уведомления
+        // от имени сервера через site.php?type=2&chatId=...&nickname=...
+        $allowLegacy = !empty($config['security']['allow_legacy_game_get']);
+        if (!$allowLegacy) {
+            // Пропускаем только если корректный токен в query (?token=) или X-Game-Token заголовок.
+            $expected = (string) ($config['security']['game_ingest_token'] ?? '');
+            $provided = (string) ($_GET['token'] ?? ($_SERVER['HTTP_X_GAME_TOKEN'] ?? ''));
+            if ($expected === '' || !hash_equals($expected, $provided)) {
+                http_response_code(403);
+                header('Content-Type: text/plain; charset=utf-8');
+                tg_webhook_log('legacy_game_get_blocked ip=' . ($_SERVER['REMOTE_ADDR'] ?? '-') . ' qs=' . ($_SERVER['QUERY_STRING'] ?? '-'));
+                echo 'Forbidden';
+                exit;
+            }
+        } else {
+            tg_webhook_log('legacy_game_get_allowed ip=' . ($_SERVER['REMOTE_ADDR'] ?? '-') . ' qs=' . ($_SERVER['QUERY_STRING'] ?? '-'));
+        }
         handleGameRequest();
     }
 }
