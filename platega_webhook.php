@@ -186,25 +186,40 @@ if ($isGiven) {
 
 function giveCoinsToPlayer(string $nickname, int $coins): bool
 {
+    /* Старое имя — оставляем как тонкую обёртку, чтобы не ломать вызовы из других мест. */
+    return givePrizeToPlayer($nickname, $coins, 'donate');
+}
+
+/**
+ * Зачисляет приз игроку в произвольную «копилку» — донат или игровые деньги.
+ *
+ * @param string $kind 'donate' → players.Cash_Donate, 'money' → players.Cash
+ */
+function givePrizeToPlayer(string $nickname, int $amount, string $kind = 'donate'): bool
+{
     global $config;
 
     /* Имена таблицы и колонок берём из config — не хардкодим. */
-    $p         = $config['players'] ?? [];
-    $tbl       = (string) ($p['player_table']    ?? 'players');
-    $nickCol   = (string) ($p['player_nick_col'] ?? 'NickName');
-    $donateCol = (string) ($p['donate_col']      ?? 'Cash_Donate');
+    $p       = $config['players'] ?? [];
+    $tbl     = (string) ($p['player_table']    ?? 'players');
+    $nickCol = (string) ($p['player_nick_col'] ?? 'NickName');
+
+    $col = $kind === 'money'
+        ? (string) ($p['money_col']  ?? 'Cash')
+        : (string) ($p['donate_col'] ?? 'Cash_Donate');
 
     /* Защищаемся от мусорных идентификаторов (если в config кто-то залил странное). */
-    $tbl       = preg_replace('/[^A-Za-z0-9_]/', '', $tbl);
-    $nickCol   = preg_replace('/[^A-Za-z0-9_]/', '', $nickCol);
-    $donateCol = preg_replace('/[^A-Za-z0-9_]/', '', $donateCol);
+    $tbl     = preg_replace('/[^A-Za-z0-9_]/', '', $tbl);
+    $nickCol = preg_replace('/[^A-Za-z0-9_]/', '', $nickCol);
+    $col     = preg_replace('/[^A-Za-z0-9_]/', '', $col);
 
     /* Не пытаемся ничего зачислять, если данные явно битые. */
-    if ($coins <= 0 || $nickname === '' || $nickname === 'unknown') {
+    if ($amount <= 0 || $nickname === '' || $nickname === 'unknown') {
         writeLog([
             'event'    => 'skip_invalid',
             'nickname' => $nickname,
-            'coins'    => $coins,
+            'amount'   => $amount,
+            'kind'     => $kind,
             'date'     => date('Y-m-d H:i:s'),
         ], 'give_log.json');
         return false;
@@ -217,22 +232,23 @@ function giveCoinsToPlayer(string $nickname, int $coins): bool
            а пользователь ввёл его иначе. На индекс не сядет — но на 1 строку это ок. */
         $stmt = $pdo->prepare(
             "UPDATE `{$tbl}`
-             SET `{$donateCol}` = `{$donateCol}` + :coins
+             SET `{$col}` = `{$col}` + :amt
              WHERE LOWER(`{$nickCol}`) = LOWER(:nick)
              LIMIT 1"
         );
-        $stmt->execute([':coins' => $coins, ':nick' => $nickname]);
+        $stmt->execute([':amt' => $amount, ':nick' => $nickname]);
 
         $affected = $stmt->rowCount();
 
         writeLog([
-            'event'     => $affected > 0 ? 'coins_given' : 'player_not_found',
-            'nickname'  => $nickname,
-            'coins'     => $coins,
-            'rows'      => $affected,
-            'table'     => $tbl,
-            'donateCol' => $donateCol,
-            'date'      => date('Y-m-d H:i:s'),
+            'event'    => $affected > 0 ? 'prize_given' : 'player_not_found',
+            'nickname' => $nickname,
+            'amount'   => $amount,
+            'kind'     => $kind,
+            'column'   => $col,
+            'rows'     => $affected,
+            'table'    => $tbl,
+            'date'     => date('Y-m-d H:i:s'),
         ], 'give_log.json');
 
         return $affected > 0;
@@ -305,7 +321,7 @@ function roulette_pick_prize(): array
     global $config;
     $prizes = $config['roulette']['prizes'] ?? [];
     if (empty($prizes)) {
-        return ['index' => 0, 'label' => 'Утешительный приз', 'coins' => 0, 'tier' => 'common', 'icon' => 'ph-coin', 'weight' => 1];
+        return ['index' => 0, 'label' => 'Утешительный приз', 'kind' => 'donate', 'amount' => 0, 'tier' => 'common', 'icon' => 'ph-coin', 'weight' => 1];
     }
 
     $totalWeight = 0;
@@ -344,10 +360,11 @@ function handleRouletteWin(string $paymentId, string $orderId, string $nickname,
 {
     global $config;
 
-    $prize = roulette_pick_prize();
-    $coins = (int) ($prize['coins'] ?? 0);
+    $prize       = roulette_pick_prize();
+    $prizeKind   = (string) ($prize['kind']   ?? 'donate');
+    $prizeAmount = (int)    ($prize['amount'] ?? $prize['coins'] ?? 0); // coins — для совместимости со старым форматом
 
-    $given = $coins > 0 ? giveCoinsToPlayer($nickname, $coins) : true;
+    $given = $prizeAmount > 0 ? givePrizeToPlayer($nickname, $prizeAmount, $prizeKind) : true;
 
     // Сохраняем результат в защищённый каталог (для polling-эндпоинта на странице рулетки)
     $resultsDir = __DIR__ . '/cache/roulette_results';
@@ -368,7 +385,8 @@ function handleRouletteWin(string $paymentId, string $orderId, string $nickname,
                 'nickname'   => $nickname,
                 'server'     => $server,
                 'prize'      => $prize,
-                'coins'      => $coins,
+                'kind'       => $prizeKind,
+                'amount'     => $prizeAmount,
                 'given'      => (bool) $given,
                 'amount_rub' => $amount,
                 'currency'   => $currency,
@@ -384,30 +402,33 @@ function handleRouletteWin(string $paymentId, string $orderId, string $nickname,
 
     // История прокрутов
     writeLog([
-        'event'      => $given ? 'spin_done' : 'spin_done_player_not_found',
-        'payment_id' => $paymentId,
-        'order_id'   => $orderId,
-        'nickname'   => $nickname,
-        'server'     => $server,
-        'prize'      => $prize['label'] ?? '?',
-        'coins'      => $coins,
-        'amount_rub' => $amount,
-        'currency'   => $currency,
-        'date'       => $paidAt,
-        'timestamp'  => time(),
+        'event'        => $given ? 'spin_done' : 'spin_done_player_not_found',
+        'payment_id'   => $paymentId,
+        'order_id'     => $orderId,
+        'nickname'     => $nickname,
+        'server'       => $server,
+        'prize_label'  => $prize['label'] ?? '?',
+        'prize_kind'   => $prizeKind,
+        'prize_amount' => $prizeAmount,
+        'amount_rub'   => $amount,
+        'currency'     => $currency,
+        'date'         => $paidAt,
+        'timestamp'    => time(),
     ], 'roulette_log.json');
 
     // Уведомление в Telegram
     $tg = $config['telegram_bot'];
     $tier = $prize['tier'] ?? 'common';
     $tierIcon = ['common' => '🪙', 'rare' => '💠', 'epic' => '💎', 'legendary' => '👑'][$tier] ?? '🎰';
+    $kindLabel = $prizeKind === 'money' ? 'Cash (₽)' : 'Cash_Donate (донат)';
     $message = "<b>🎰 Прокрут рулетки</b>\n\n"
              . "Игрок: <code>{$nickname}</code>\n"
              . "Сервер: {$server}\n"
              . "Сумма: {$amount} {$currency}\n"
              . "Приз: {$tierIcon} <b>" . htmlspecialchars((string) ($prize['label'] ?? '?')) . "</b>\n"
-             . "Монет начислено: {$coins}\n"
-             . ($given ? '' : "<i>⚠ Игрок с этим ником не найден в БД — монеты не зачислены, выдай вручную.</i>\n")
+             . "Зачислено в: {$kindLabel}\n"
+             . "Сумма приза: " . number_format($prizeAmount, 0, '.', ' ') . "\n"
+             . ($given ? '' : "<i>⚠ Игрок с этим ником не найден в БД — приз не зачислен, выдай вручную.</i>\n")
              . "Время: {$paidAt}\n"
              . "ID платежа: <code>{$paymentId}</code>\n"
              . "Order ID: <code>{$orderId}</code>";

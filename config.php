@@ -111,6 +111,7 @@ $config = [
         'player_table'    => 'players',
         'player_nick_col' => 'NickName',
         'donate_col'      => 'Cash_Donate',
+        'money_col'       => 'Cash',
     ],
 
     /**
@@ -118,19 +119,31 @@ $config = [
      *  price   — стоимость одного прокрута в рублях.
      *  prizes  — массив призов:
      *    label  — что показать в UI
-     *    coins  — сколько монет начислить в players.Cash_Donate при выпадении
-     *    weight — относительный вес. Шанс = weight / sum(weights).
+     *    kind   — 'donate' (зачисляется в players.Cash_Donate) или 'money' (в players.Cash)
+     *    amount — сколько начислить (для donate — донат-монеты; для money — игровые рубли)
+     *    weight — относительный вес. Шанс = weight / sum(weights). Минимум 1 = минимальный шанс.
      *    tier   — common | rare | epic | legendary (визуальный окрас)
      *    icon   — phosphor-icon (без префикса ph-)
      */
     'roulette' => [
         'price'  => 150,
         'prizes' => [
-            ['label' => '50 монет',     'coins' => 50,    'weight' => 60, 'tier' => 'common',    'icon' => 'ph-coin'],
-            ['label' => '150 монет',    'coins' => 150,   'weight' => 25, 'tier' => 'common',    'icon' => 'ph-coins'],
-            ['label' => '500 монет',    'coins' => 500,   'weight' => 10, 'tier' => 'rare',      'icon' => 'ph-coins'],
-            ['label' => '1 500 монет',  'coins' => 1500,  'weight' => 4,  'tier' => 'epic',      'icon' => 'ph-diamond'],
-            ['label' => '10 000 монет', 'coins' => 10000, 'weight' => 1,  'tier' => 'legendary', 'icon' => 'ph-crown'],
+            /* Донат-призы */
+            ['label' => '10 доната',    'kind' => 'donate', 'amount' => 10,        'weight' => 250, 'tier' => 'common',    'icon' => 'ph-coin'],
+            ['label' => '20 доната',    'kind' => 'donate', 'amount' => 20,        'weight' => 200, 'tier' => 'common',    'icon' => 'ph-coin'],
+            ['label' => '50 доната',    'kind' => 'donate', 'amount' => 50,        'weight' => 150, 'tier' => 'common',    'icon' => 'ph-coins'],
+            ['label' => '100 доната',   'kind' => 'donate', 'amount' => 100,       'weight' => 100, 'tier' => 'common',    'icon' => 'ph-coins'],
+            ['label' => '150 доната',   'kind' => 'donate', 'amount' => 150,       'weight' =>  80, 'tier' => 'rare',      'icon' => 'ph-coins'],
+
+            /* Денежные призы (Cash) */
+            ['label' => '25 000 000 ₽', 'kind' => 'money',  'amount' => 25000000,  'weight' =>  80, 'tier' => 'rare',      'icon' => 'ph-money'],
+            ['label' => '30 000 000 ₽', 'kind' => 'money',  'amount' => 30000000,  'weight' =>  60, 'tier' => 'rare',      'icon' => 'ph-money'],
+            ['label' => '45 000 000 ₽', 'kind' => 'money',  'amount' => 45000000,  'weight' =>  40, 'tier' => 'epic',      'icon' => 'ph-money'],
+            ['label' => '50 000 000 ₽', 'kind' => 'money',  'amount' => 50000000,  'weight' =>  30, 'tier' => 'epic',      'icon' => 'ph-money'],
+
+            /* Джекпоты — минимальный возможный шанс выпадения */
+            ['label' => '1 000 доната',   'kind' => 'donate', 'amount' => 1000,      'weight' => 1, 'tier' => 'legendary', 'icon' => 'ph-crown'],
+            ['label' => '650 000 000 ₽', 'kind' => 'money',  'amount' => 650000000, 'weight' => 1, 'tier' => 'legendary', 'icon' => 'ph-diamond'],
         ],
     ],
 ];
