@@ -1,5 +1,6 @@
 <?php
 require_once 'config.php';
+require_once 'pending_payment.php';
 
 $nickname    = trim($_POST['nickname']    ?? '');
 $server_name = trim($_POST['server_name'] ?? $config['core']['server']['name']);
@@ -31,7 +32,7 @@ if ($purpose === 'roulette') {
 $orderId = 'order_' . time() . '_' . bin2hex(random_bytes(4));
 
 session_start();
-$_SESSION['pending_payment'] = [
+$pendingPayment = [
     'order_id'   => $orderId,
     'purpose'    => $purpose,
     'nickname'   => $nickname,
@@ -41,6 +42,11 @@ $_SESSION['pending_payment'] = [
     'method'     => $method,
     'created_at' => date('Y-m-d H:i:s'),
 ];
+$_SESSION['pending_payment'] = $pendingPayment;
+
+/* Параллельно сохраняем в БД, чтобы webhook от Platega (у него нашей сессии нет)
+   мог достать nickname/coins по order_id, даже если Platega не вернёт payload. */
+pending_payment_save($pendingPayment);
 
 $paymentMethodId = 2;
 
