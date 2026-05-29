@@ -528,9 +528,19 @@ $methods = [
         resultCard.className = 'result-card tier-' + (prize.tier || 'common');
         resultIcon.className = 'ph-fill ' + (prize.icon || 'ph-coin');
         resultLabel.textContent = prize.label || '—';
-        resultNote.textContent = prize.coins
-            ? ('+ ' + Number(prize.coins).toLocaleString('ru-RU') + ' монет начислено на аккаунт.')
-            : 'Награда зачислена на ваш аккаунт.';
+
+        const amount = Number(prize.amount || prize.coins || 0);
+        if (amount > 0) {
+            const formatted = amount.toLocaleString('ru-RU');
+            if (prize.kind === 'money') {
+                resultNote.textContent = '+ ' + formatted + ' ₽ зачислено в Cash.';
+            } else {
+                resultNote.textContent = '+ ' + formatted + ' доната зачислено в Cash_Donate.';
+            }
+        } else {
+            resultNote.textContent = 'Награда зачислена на ваш аккаунт.';
+        }
+
         resultModal.classList.add('open');
         document.body.style.overflow = 'hidden';
     }
