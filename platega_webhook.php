@@ -189,10 +189,10 @@ function giveCoinsToPlayer(string $nickname, int $coins): bool
     global $config;
 
     /* Имена таблицы и колонок берём из config — не хардкодим. */
-    $auth      = $config['auth'] ?? [];
-    $tbl       = (string) ($auth['player_table']    ?? 'players');
-    $nickCol   = (string) ($auth['player_nick_col'] ?? 'NickName');
-    $donateCol = (string) ($auth['bonus_coins_col'] ?? 'Cash_Donate');
+    $p         = $config['players'] ?? [];
+    $tbl       = (string) ($p['player_table']    ?? 'players');
+    $nickCol   = (string) ($p['player_nick_col'] ?? 'NickName');
+    $donateCol = (string) ($p['donate_col']      ?? 'Cash_Donate');
 
     /* Защищаемся от мусорных идентификаторов (если в config кто-то залил странное). */
     $tbl       = preg_replace('/[^A-Za-z0-9_]/', '', $tbl);
