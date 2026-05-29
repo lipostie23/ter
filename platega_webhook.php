@@ -1,5 +1,7 @@
 <?php
 require_once 'config.php';
+require_once 'action_log.php';
+require_once 'pending_payment.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -49,6 +51,24 @@ $nickname = $meta['nickname'] ?? 'unknown';
 $server   = $meta['server']   ?? 'unknown';
 $coins    = (int)($meta['coins'] ?? 0);
 
+/* Fallback: если Platega почему-то не вернула payload (или часть полей в нём
+   потеряна), достаём метаданные по order_id из таблицы pending_payments,
+   куда мы их положили в create_payment.php. */
+if ($orderId !== 'unknown') {
+    $pending = pending_payment_get($orderId);
+    if ($pending) {
+        if ($nickname === 'unknown' || $nickname === '') $nickname = (string) $pending['nickname'];
+        if ($server   === 'unknown' || $server   === '') $server   = (string) $pending['server'];
+        if ($coins   <= 0) $coins   = (int) $pending['coins'];
+        if ($purpose === 'donate') $purpose = (string) ($pending['purpose'] ?? 'donate');
+    }
+}
+
+/* Сумма в рублях из callback'а или, если её нет, из нашего pending. */
+if ($amount <= 0 && !empty($pending['amount'])) {
+    $amount = (float) $pending['amount'];
+}
+
 // --- ОПТИМИЗАЦИЯ ПРОВЕРКИ ДУБЛИКАТОВ ---
 // Чтобы не грузить 50 000 записей в память для проверки одного ID, 
 // используем быстрый отдельный файл-индекс для дубликатов в целях производительности.
@@ -73,6 +93,40 @@ if ($purpose === 'roulette') {
 
 // Сначала ЖЕСТКО выдаем монеты игроку, чтобы никакие проблемы с файлами не мешали транзакции!
 $isGiven = giveCoinsToPlayer($nickname, $coins);
+
+/* === Логирование в action_logs ===
+   Запись формата:
+   "Игрок Ivan_Ivanov пополнил донат-счет на 500 рублей через Platega,
+    ID ордера: order_xxx, статус сохранения в БД: true." */
+$paymentSystem = 'Platega';
+$amountForLog  = (int) round((float) $amount);
+$logMessage = sprintf(
+    'Игрок %s пополнил донат-счет на %d рублей через %s, ID ордера: %s, статус сохранения в БД: %s.',
+    $nickname !== '' ? $nickname : 'unknown',
+    $amountForLog,
+    $paymentSystem,
+    $orderId,
+    $isGiven ? 'true' : 'false'
+);
+action_log_write(
+    'donate',
+    $logMessage,
+    $nickname,
+    [
+        'order_id'      => $orderId,
+        'payment_id'    => $paymentId,
+        'amount_rub'    => $amountForLog,
+        'coins'         => $coins,
+        'currency'      => $currency,
+        'payment_system'=> $paymentSystem,
+        'server'        => $server,
+        'method'        => ($meta['method'] ?? null) ?: ($pending['method'] ?? ''),
+        'db_saved'      => $isGiven,
+    ]
+);
+
+/* Помечаем pending как закрытый — чтобы потом было видно историю успешных. */
+pending_payment_mark_confirmed($orderId);
 
 if ($isGiven) {
     // Создаем метку, что платеж обработан успешно
@@ -132,35 +186,58 @@ if ($isGiven) {
 
 function giveCoinsToPlayer(string $nickname, int $coins): bool
 {
+    global $config;
+
+    /* Имена таблицы и колонок берём из config — не хардкодим. */
+    $auth      = $config['auth'] ?? [];
+    $tbl       = (string) ($auth['player_table']    ?? 'players');
+    $nickCol   = (string) ($auth['player_nick_col'] ?? 'NickName');
+    $donateCol = (string) ($auth['bonus_coins_col'] ?? 'Cash_Donate');
+
+    /* Защищаемся от мусорных идентификаторов (если в config кто-то залил странное). */
+    $tbl       = preg_replace('/[^A-Za-z0-9_]/', '', $tbl);
+    $nickCol   = preg_replace('/[^A-Za-z0-9_]/', '', $nickCol);
+    $donateCol = preg_replace('/[^A-Za-z0-9_]/', '', $donateCol);
+
+    /* Не пытаемся ничего зачислять, если данные явно битые. */
+    if ($coins <= 0 || $nickname === '' || $nickname === 'unknown') {
+        writeLog([
+            'event'    => 'skip_invalid',
+            'nickname' => $nickname,
+            'coins'    => $coins,
+            'date'     => date('Y-m-d H:i:s'),
+        ], 'give_log.json');
+        return false;
+    }
+
     try {
-        // Подключение берётся из config.php (db_pdo), хосты remote/local + fallback внутри.
         $pdo = db_pdo();
 
-        // Приводим к нижнему регистру саму переменную, чтобы разгрузить SQL-запрос
-        $lowercaseNick = mb_strtolower($nickname, 'UTF-8');
-
+        /* LOWER() с обеих сторон — на случай, если в БД ник в смешанном регистре,
+           а пользователь ввёл его иначе. На индекс не сядет — но на 1 строку это ок. */
         $stmt = $pdo->prepare(
-            "UPDATE `players`
-             SET `Cash_Donate` = `Cash_Donate` + :coins
-             WHERE LOWER(`NickName`) = :nick
+            "UPDATE `{$tbl}`
+             SET `{$donateCol}` = `{$donateCol}` + :coins
+             WHERE LOWER(`{$nickCol}`) = LOWER(:nick)
              LIMIT 1"
         );
-        $stmt->execute([':coins' => $coins, ':nick' => $lowercaseNick]);
+        $stmt->execute([':coins' => $coins, ':nick' => $nickname]);
 
         $affected = $stmt->rowCount();
 
         writeLog([
-            'event'    => $affected > 0 ? 'coins_given' : 'player_not_found',
-            'nickname' => $nickname,
-            'coins'    => $coins,
-            'rows'     => $affected,
-            'date'     => date('Y-m-d H:i:s'),
+            'event'     => $affected > 0 ? 'coins_given' : 'player_not_found',
+            'nickname'  => $nickname,
+            'coins'     => $coins,
+            'rows'      => $affected,
+            'table'     => $tbl,
+            'donateCol' => $donateCol,
+            'date'      => date('Y-m-d H:i:s'),
         ], 'give_log.json');
 
-        // Если affected rows = 0, значит игрока с таким ником просто нет в бд
         return $affected > 0;
 
-    } catch (\Exception $e) {
+    } catch (\Throwable $e) {
         writeLog([
             'event'    => 'db_error',
             'nickname' => $nickname,
@@ -168,7 +245,7 @@ function giveCoinsToPlayer(string $nickname, int $coins): bool
             'error'    => $e->getMessage(),
             'date'     => date('Y-m-d H:i:s'),
         ], 'errors.json');
-        
+
         return false;
     }
 }
