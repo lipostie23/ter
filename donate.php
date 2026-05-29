@@ -317,7 +317,7 @@ $paymentError = isset($_GET['error']) && $_GET['error'] === 'payment_failed';
                     <div class="r-section">
                         <div class="r-label">Сумма</div>
                         <div class="r-input-wrap r-amount-row">
-                            <input type="number" class="r-input" name="amount" id="amountInput" placeholder="0" min="10" max="100000" step="1" inputmode="numeric" required>
+                            <input type="number" class="r-input" name="amount" id="amountInput" placeholder="0" min="1" max="100000" step="1" inputmode="numeric" required>
                             <span class="currency">₽</span>
                         </div>
                         <div class="r-amount-hint" id="coinsHint"><i class="ph-fill ph-coin"></i> <span id="coinsHintText"></span></div>
@@ -475,7 +475,7 @@ $paymentError = isset($_GET['error']) && $_GET['error'] === 'payment_failed';
             sumDiscRow.style.display = 'none';
         }
 
-        if (amount >= 10) {
+        if (amount >= 1) {
             coinsHintText.textContent = '+ ' + fmt(totalCoins) + ' монет' + (bonus > 0 ? ' (с бонусом)' : '');
             coinsHint.classList.add('show');
         } else {
@@ -521,7 +521,7 @@ $paymentError = isset($_GET['error']) && $_GET['error'] === 'payment_failed';
         const amount = parseInt(amountInput.value);
         if (!nick) { showError('Укажите никнейм'); return false; }
         if (!/^[A-Za-z0-9_]{2,24}$/.test(nick)) { showError('Никнейм: латиница, цифры, "_", 2–24 символа'); return false; }
-        if (!amount || amount < 10) { showError('Минимальная сумма — 10 ₽'); return false; }
+        if (!amount || amount < 1) { showError('Минимальная сумма — 1 ₽'); return false; }
         if (amount > 100000) { showError('Максимальная сумма — 100 000 ₽'); return false; }
         return true;
     }

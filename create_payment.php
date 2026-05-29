@@ -21,7 +21,7 @@ if ($purpose === 'roulette') {
     $description = "Рулетка · {$nickname} · {$server_name} · {$amount} {$pt['currency']}";
 } else {
     $amount = (int) ($_POST['amount'] ?? 0);
-    if ($amount < 10 || $amount > 100000) {
+    if ($amount < 1 || $amount > 100000) {
         header('Location: donate.php?error=invalid');
         exit;
     }
