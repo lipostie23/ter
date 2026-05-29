@@ -789,58 +789,6 @@ function bonus_create(string $code, array $prizes, int $activation, int $minutes
              VALUES (:n, :d0, :d1, :d2, :act, :min)"
         );
         $stmt->execute($params);
-    /* Раскладываем приз в формат Promocodes (10 слотов).
-       Слот 0 = текущий приз; остальные 9 = нули. */
-    if ($prizeType === BONUS_PRIZE_ITEM) {
-        $data0 = bonus_pack_data([$prizeType]);
-        $data1 = bonus_pack_data([$prizeValue]);   // ID предмета
-        $data2 = bonus_pack_data([$prizeExtra]);   // количество
-    } else {
-        $data0 = bonus_pack_data([$prizeType]);
-        $data1 = bonus_pack_data([0]);
-        $data2 = bonus_pack_data([$prizeValue]);   // сумма / кол-во
-    }
-
-    /* Minutes: если задан expires_at — переводим в минуты от текущего момента,
-       чтобы игровой мод тоже знал срок жизни. 0 = бессрочно. */
-    $minutes = 0;
-    if ($expiresAt !== null) {
-        $delta = strtotime($expiresAt) - time();
-        $minutes = $delta > 0 ? (int) ceil($delta / 60) : 0;
-    }
-
-    $pdo = db_pdo();
-    $pdo->beginTransaction();
-    try {
-        $stmt = $pdo->prepare(
-            "INSERT INTO `Promocodes`
-                (`Name`, `Data_0`, `Data_1`, `Data_2`, `Activation`, `Minutes`)
-             VALUES
-                (:n, :d0, :d1, :d2, :act, :min)"
-        );
-        $stmt->execute([
-            ':n'   => $code,
-            ':d0'  => $data0,
-            ':d1'  => $data1,
-            ':d2'  => $data2,
-            ':act' => $usageLimit,
-            ':min' => $minutes,
-        ]);
-
-        $meta = $pdo->prepare(
-            "INSERT INTO `BonusCodesMeta` (`code`, `created_by`, `created_at`, `expires_at`)
-             VALUES (:c, :a, NOW(), :exp)"
-        );
-        $meta->execute([
-            ':c'   => $code,
-            ':a'   => $admin,
-            ':exp' => $expiresAt,
-        ]);
-
-        $pdo->commit();
-    } catch (\Throwable $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        throw $e;
     }
 }
 
@@ -864,16 +812,6 @@ function bonus_delete(string $code): bool
     } catch (\Throwable $e) { /* не критично */ }
 
     return $ok;
-    $pdo = db_pdo();
-    $stmt = $pdo->prepare("DELETE FROM `Promocodes` WHERE `Name` = :c");
-    $stmt->execute([':c' => $code]);
-    $deleted = $stmt->rowCount() > 0;
-
-    /* Подчищаем сайд-таблицы. */
-    $pdo->prepare("DELETE FROM `BonusCodesMeta` WHERE `code` = :c")->execute([':c' => $code]);
-    $pdo->prepare("DELETE FROM `BonusCodeUsage` WHERE `code` = :c")->execute([':c' => $code]);
-
-    return $deleted;
 }
 
 /**
@@ -981,24 +919,6 @@ function bonus_redeem(string $code, string $nickname): array
     $prizes = $row['_prizes'] ?? [];
     if (empty($prizes)) {
         return ['ok' => false, 'message' => 'У этого кода нет призов.', 'reward' => '', 'prizes' => []];
-    /* Собираем все непустые слоты призов. */
-    $types = $row['_types'];
-    $vals  = $row['_vals'];
-    $amts  = $row['_amts'];
-
-    $prizes = [];
-    for ($i = 0; $i < 10; $i++) {
-        $t = (int) $types[$i];
-        if ($t <= 0) continue;
-        if ($t === BONUS_PRIZE_ITEM) {
-            $prizes[] = [$t, (int) $vals[$i], (int) $amts[$i]];
-        } else {
-            $prizes[] = [$t, (int) $amts[$i], 0];
-        }
-    }
-
-    if (empty($prizes)) {
-        return ['ok' => false, 'message' => 'У кода нет призов.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
     }
 
     $pdo = db_pdo();
@@ -1015,18 +935,6 @@ function bonus_redeem(string $code, string $nickname): array
             $ins = $pdo->prepare(
                 "INSERT INTO `{$usedTable}` (`{$usedName}`, `{$usedNick}`) VALUES (:c, :n)"
             );
-        /* Атомарно проверяем, что лимит ещё не исчерпан, через INSERT с уникальным ключом. */
-        $usage = $pdo->prepare(
-            "INSERT INTO `BonusCodeUsage` (`code`, `nickname`, `used_at`) VALUES (:c, :n, NOW())"
-        );
-        $usage->execute([':c' => $code, ':n' => $nickname]);
-
-        /* Перепроверяем лимит уже после вставки. */
-        $cnt = $pdo->prepare("SELECT COUNT(*) FROM `BonusCodeUsage` WHERE `code` = :c");
-        $cnt->execute([':c' => $code]);
-        if ((int) $cnt->fetchColumn() > (int) $row['usage_limit']) {
-            $pdo->rollBack();
-            return ['ok' => false, 'message' => 'Лимит использований исчерпан.', 'reward' => '', 'type' => 0, 'value' => 0, 'extra' => 0];
         }
         $ins->execute([':c' => $code, ':n' => $nickname]);
 
@@ -1043,16 +951,6 @@ function bonus_redeem(string $code, string $nickname): array
             }
         }
         if ($applied === 0) {
-        $appliedAny = false;
-        $rewardParts = [];
-        foreach ($prizes as [$pType, $pVal, $pExtra]) {
-            if (bonus_apply_prize($pdo, $nickname, $pType, $pVal, $pExtra, $code)) {
-                $appliedAny = true;
-            }
-            $rewardParts[] = bonus_prize_describe($pType, $pVal, $pExtra);
-        }
-
-        if (!$appliedAny) {
             $pdo->rollBack();
             return ['ok' => false, 'message' => 'Игровой аккаунт не найден.', 'reward' => '', 'prizes' => []];
         }
@@ -1063,22 +961,6 @@ function bonus_redeem(string $code, string $nickname): array
             'message' => 'Зачислено!',
             'reward'  => bonus_prizes_describe($prizes),
             'prizes'  => $prizes,
-
-        $reward = implode(' + ', $rewardParts);
-        $first  = $prizes[0];
-        $hasItem = false;
-        foreach ($prizes as $p) { if ($p[0] === BONUS_PRIZE_ITEM) { $hasItem = true; break; } }
-        $msg = $hasItem
-            ? 'Часть награды отправлена в очередь предметов — зайди в игру.'
-            : 'Зачислено!';
-
-        return [
-            'ok'      => true,
-            'message' => $msg,
-            'reward'  => $reward,
-            'type'    => $first[0],
-            'value'   => $first[1],
-            'extra'   => $first[2],
         ];
     } catch (\Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
